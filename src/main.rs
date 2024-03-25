@@ -1,10 +1,13 @@
+use std::time::Instant;
+
 use log::{error, info};
 use winit::{
-    event::{Event, WindowEvent},
-    event_loop::EventLoop,
+    event::{DeviceEvent, Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
     window::WindowBuilder,
 };
 mod camera;
+mod resources;
 mod state;
 mod voxel;
 use state::State;
@@ -23,16 +26,28 @@ fn main() {
         .block_on(State::new(&window))
         .unwrap();
 
+    info!("State initialized");
+
+    let mut last_render_time = Instant::now();
     event_loop
-        .run(move |event, control_flow| {
+        .run(move |event, window_target| {
+            // info!("EVent: {:?}", event);
+            window_target.set_control_flow(ControlFlow::Poll);
             match event {
+                Event::NewEvents(_) => state.window().request_redraw(),
+                Event::DeviceEvent { device_id: _, event } => {
+                  match event {
+                        DeviceEvent::MouseMotion { delta } => state.camera_controller.process_mouse(delta.0, delta.1),
+                        _ => {},
+                    };
+                },
                 Event::WindowEvent { window_id, event } => {
                     if window_id == state.window().id() {
                         if !state.input(&event) {
                             match event {
                                 WindowEvent::CloseRequested => {
                                     info!("Exiting...");
-                                    control_flow.exit();
+                                    window_target.exit();
                                 }
                                 WindowEvent::Resized(new_size) => {
                                     state.resize(new_size);
@@ -47,25 +62,26 @@ fn main() {
                                     );
                                 },
                                 WindowEvent::RedrawRequested => {
-                                    state.update();
+                                    let now = Instant::now();
+                                    let dt = now - last_render_time;
+                                    last_render_time = now;
+                                    state.update(dt);
                                     match state.render() {
                                         Ok(_) => {},
                                         Err(wgpu::SurfaceError::Lost) => state.resize(state.size()),
-                                        Err(wgpu::SurfaceError::OutOfMemory) => control_flow.exit(),
+                                        Err(wgpu::SurfaceError::OutOfMemory) => window_target.exit(),
                                         Err(e) => error!("{e}")
                                     }
                                 },
                                 _ => {}
                             }
-                        } else {
-                            state.update();
-                            state.render().unwrap();
-                            // state.window().request_redraw();
-                        }
+                        } 
                     }
                 },
                 _ => {}
             };
         })
         .unwrap();
+
+    info!("Event Loop Out");
 }
