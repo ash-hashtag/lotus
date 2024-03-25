@@ -4,6 +4,7 @@ use winit::{
     event_loop::EventLoop,
     window::WindowBuilder,
 };
+mod camera;
 mod state;
 mod voxel;
 use state::State;
@@ -56,6 +57,10 @@ fn main() {
                                 },
                                 _ => {}
                             }
+                        } else {
+                            state.update();
+                            state.render().unwrap();
+                            // state.window().request_redraw();
                         }
                     }
                 },
