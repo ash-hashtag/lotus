@@ -31,29 +31,47 @@ impl WireframeRenderPipeline {
             source: wgpu::ShaderSource::Wgsl(shader_code.into()),
         };
 
-        let render_pipeline = create_render_pipeline(
-            &device,
-            &layout,
-            color_format,
-            Some(texture::Texture::DEPTH_FORMAT),
-            &[ModelVertex::desc(), InstanceRaw::desc()],
-            shader,
-            "Wireframe Render Pipeline",
-        );
+        let vertex_layouts = &[ModelVertex::desc(), InstanceRaw::desc()];
+        let depth_format = texture::Texture::DEPTH_FORMAT;
+
+        let label = "Wireframe Render Pipeline";
+
+        let shader = device.create_shader_module(shader);
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: "vs_main",
+                buffers: vertex_layouts,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: "fs_main",
+                targets: &[Some(color_format.into())],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Line,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
         Ok(Self { render_pipeline })
     }
-
-    // pub fn draw_mesh_instanced<'a, 'b: 'a>(
-    //     mesh: &'b Mesh,
-    //     instances: Range<u32>,
-    //     render_pass: &'a mut wgpu::RenderPass<'a>,
-    //     camera_bind_group: &'a wgpu::BindGroup,
-    // ) {
-    //     render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-    //     render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-    //     render_pass.set_bind_group(1, camera_bind_group, &[]);
-    //     render_pass.draw_indexed(0..mesh.num_elements, 0, instances);
-    // }
 }
 
 pub trait DrawWireframe<'a> {

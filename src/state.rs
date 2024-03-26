@@ -17,6 +17,7 @@ use winit::{
 use crate::{
     camera::{Camera, CameraController, CameraUniform, Projection},
     pipelines::wireframe::{DrawWireframe, WireframeRenderPipeline},
+    ui::text::DebugOverlayNode,
     voxel::{
         instance::{Instance, InstanceRaw, INSTANCE_DISPLACEMENT, NUM_INSTANCES_PER_ROW},
         light::LightUniform,
@@ -27,10 +28,12 @@ use crate::{
 };
 
 pub struct State<'window> {
+    debug_overlay_node: Option<DebugOverlayNode<'static>>,
+    delta: Duration,
+    surface: wgpu::Surface<'window>,
     window: &'window Window,
 
     size: winit::dpi::PhysicalSize<u32>,
-    surface: wgpu::Surface<'window>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -96,7 +99,7 @@ impl<'w> State<'w> {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::empty(),
+                    required_features: wgpu::Features::POLYGON_MODE_LINE,
                     required_limits: wgpu::Limits::default(),
                     label: None,
                 },
@@ -114,8 +117,9 @@ impl<'w> State<'w> {
             .filter(|f| f.is_srgb())
             .next()
             .unwrap_or(&swapchain_format);
-        let present_mode = surface_capabilities.present_modes[0];
+        // let present_mode = surface_capabilities.present_modes[0];
         let alpha_mode = surface_capabilities.alpha_modes[0];
+        let present_mode = wgpu::PresentMode::AutoVsync;
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -258,16 +262,20 @@ impl<'w> State<'w> {
         const SPACE_BETWEEN: f32 = 3.0;
         let instances: Vec<_> = (0..NUM_INSTANCES_PER_ROW)
             .flat_map(|z| {
-                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
-                    let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
-                    let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
-                    let position = cgmath::Vector3 { x, y: 0.0, z } - INSTANCE_DISPLACEMENT;
+                (0..NUM_INSTANCES_PER_ROW).flat_map(move |x| {
+                    (0..NUM_INSTANCES_PER_ROW).map(move |y| {
+                        let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                        let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                        let y = SPACE_BETWEEN * (y as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                        let position = cgmath::Vector3 { x, y, z } - INSTANCE_DISPLACEMENT;
 
-                    let rotation = cgmath::Quaternion::from_axis_angle(
-                        cgmath::Vector3::unit_z(),
-                        cgmath::Deg(0.0),
-                    );
+                        let rotation = cgmath::Quaternion::from_axis_angle(
+                            cgmath::Vector3::unit_z(),
+                            cgmath::Deg(0.0),
+                        );
 
+                        Instance { position, rotation }
+                    })
                     // let rotation = if position.is_zero() {
                     //     cgmath::Quaternion::from_axis_angle(
                     //         cgmath::Vector3::unit_z(),
@@ -276,8 +284,6 @@ impl<'w> State<'w> {
                     // } else {
                     //     cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
                     // };
-
-                    Instance { position, rotation }
                 })
             })
             .collect();
@@ -411,7 +417,7 @@ impl<'w> State<'w> {
         );
 
         let obj_model = Model::load_obj_model_from_file_path(
-            "assets/models/cube.obj".into(),
+            "assets/models/plane_cube.obj".into(),
             &device,
             &queue,
             &texture_bind_group_layout,
@@ -449,7 +455,22 @@ impl<'w> State<'w> {
 
         let show_wireframe = false;
 
+        let font_bytes = include_bytes!("../assets/fonts/DejaVuSans.ttf");
+
+        let delta = Duration::ZERO;
+
+        let debug_overlay_node = Some(DebugOverlayNode::new(
+            font_bytes,
+            &device,
+            config.width,
+            config.height,
+            config.format,
+            [1.0f32; 4],
+        )?);
+
         Ok(Self {
+            debug_overlay_node,
+            delta,
             wireframe_render_pipeline,
             projection,
             debug_material,
@@ -563,6 +584,10 @@ impl<'w> State<'w> {
         //     bytemuck::cast_slice(&[self.light_uniform]),
         // );
         // info!("delta: {:?}", dt);
+        self.delta = dt;
+        if let Some(debug_overlay) = &mut self.debug_overlay_node {
+            debug_overlay.update(dt);
+        }
 
         self.camera_controller.update_camera(&mut self.camera, dt);
         self.camera_uniform
@@ -642,14 +667,30 @@ impl<'w> State<'w> {
                     &self.light_bind_group,
                 );
             }
+        }
 
-            // render_pass.draw_model_instanced_with_material(
-            //     &self.obj_model,
-            //     &self.debug_material,
-            //     instances,
-            //     &self.camera_bind_group,
-            //     &self.light_bind_group,
-            // );
+        {
+            let mut ui_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Ui Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+            {
+                if let Some(debug_overlay) = &mut self.debug_overlay_node {
+                    debug_overlay.queue(&self.device, &self.queue);
+                    debug_overlay.draw(&mut ui_render_pass);
+                }
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

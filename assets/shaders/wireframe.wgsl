@@ -76,11 +76,6 @@ fn vs_main(
 fn fs_main(
 in: VertexOutput
 ) -> @location(0) vec4<f32> {
-    // make it draw wireframe instead of solid color
-    let x = in.tangent_position.x;
-    let y = in.tangent_position.y;
-    let z = in.tangent_position.z;
-    let edge_threshold = 0.01;
    
-    return vec4<f32>(x, y, z, 1.0);
+    return vec4<f32>(1.0);
 }

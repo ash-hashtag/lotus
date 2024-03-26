@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{time::Instant, str::FromStr};
 
 use log::{error, info};
 use winit::{
@@ -11,11 +11,12 @@ mod resources;
 mod state;
 mod voxel;
 mod pipelines;
+mod app_config;
+mod ui;
 use state::State;
 
 fn main() {
-    std::env::set_var("RUST_LOG", "info");
-    env_logger::init();
+    fast_log::init(fast_log::Config::new().console().level(log::LevelFilter::Info));
     info!("Initiating...");
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new()
