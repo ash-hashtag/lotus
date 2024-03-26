@@ -10,6 +10,7 @@ mod camera;
 mod resources;
 mod state;
 mod voxel;
+mod pipelines;
 use state::State;
 
 fn main() {

@@ -6,15 +6,17 @@ use std::{
 use anyhow::{anyhow, Context};
 use cgmath::{InnerSpace, Point3, Rotation3, Vector3, Zero};
 use image::GenericImageView;
-use log::info;
+use log::{info, warn};
 use wgpu::util::DeviceExt;
 use winit::{
     event::{ElementState, WindowEvent},
+    keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
 
 use crate::{
     camera::{Camera, CameraController, CameraUniform, Projection},
+    pipelines::wireframe::{DrawWireframe, WireframeRenderPipeline},
     voxel::{
         instance::{Instance, InstanceRaw, INSTANCE_DISPLACEMENT, NUM_INSTANCES_PER_ROW},
         light::LightUniform,
@@ -63,6 +65,9 @@ pub struct State<'window> {
 
     debug_material: Material,
     mouse_pressed: bool,
+
+    wireframe_render_pipeline: Option<WireframeRenderPipeline>,
+    show_wireframe: bool,
 }
 impl<'w> State<'w> {
     pub async fn new(window: &'w Window) -> anyhow::Result<Self> {
@@ -257,14 +262,20 @@ impl<'w> State<'w> {
                     let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
                     let z = SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
                     let position = cgmath::Vector3 { x, y: 0.0, z } - INSTANCE_DISPLACEMENT;
-                    let rotation = if position.is_zero() {
-                        cgmath::Quaternion::from_axis_angle(
-                            cgmath::Vector3::unit_z(),
-                            cgmath::Deg(0.0),
-                        )
-                    } else {
-                        cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-                    };
+
+                    let rotation = cgmath::Quaternion::from_axis_angle(
+                        cgmath::Vector3::unit_z(),
+                        cgmath::Deg(0.0),
+                    );
+
+                    // let rotation = if position.is_zero() {
+                    //     cgmath::Quaternion::from_axis_angle(
+                    //         cgmath::Vector3::unit_z(),
+                    //         cgmath::Deg(0.0),
+                    //     )
+                    // } else {
+                    //     cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                    // };
 
                     Instance { position, rotation }
                 })
@@ -325,6 +336,10 @@ impl<'w> State<'w> {
                 }],
             });
 
+        let wireframe_render_pipeline = Some(
+            WireframeRenderPipeline::new(&device, &camera_bind_group_layout, config.format).await?,
+        );
+
         let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &light_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
@@ -352,19 +367,9 @@ impl<'w> State<'w> {
                 Some(texture::Texture::DEPTH_FORMAT),
                 &[ModelVertex::desc()],
                 shader,
+                "Light Render Pipeline",
             )
         };
-
-        let render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    &texture_bind_group_layout,
-                    &camera_bind_group_layout,
-                    &light_bind_group_layout,
-                ],
-                push_constant_ranges: &[],
-            });
 
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Vertex Buffer"),
@@ -384,6 +389,17 @@ impl<'w> State<'w> {
         let depth_texture =
             texture::Texture::create_depth_texture(&device, &config, "depth_texture");
 
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[
+                    &texture_bind_group_layout,
+                    &camera_bind_group_layout,
+                    &light_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+
         let render_pipeline = create_render_pipeline(
             &device,
             &render_pipeline_layout,
@@ -391,6 +407,7 @@ impl<'w> State<'w> {
             Some(texture::Texture::DEPTH_FORMAT),
             &[ModelVertex::desc(), InstanceRaw::desc()],
             shader,
+            "Render Pipeline",
         );
 
         let obj_model = Model::load_obj_model_from_file_path(
@@ -430,7 +447,10 @@ impl<'w> State<'w> {
             )
         };
 
+        let show_wireframe = false;
+
         Ok(Self {
+            wireframe_render_pipeline,
             projection,
             debug_material,
             window,
@@ -466,6 +486,8 @@ impl<'w> State<'w> {
 
             last_draw_call_ts,
             mouse_pressed: false,
+
+            show_wireframe,
         })
     }
 
@@ -502,7 +524,26 @@ impl<'w> State<'w> {
                 true
             }
             WindowEvent::KeyboardInput { event, .. } => {
-                self.camera_controller.process_keyboard(event)
+                let is_pressed = event.state == ElementState::Pressed;
+                match event.physical_key {
+                    PhysicalKey::Code(key_code) => match key_code {
+                        KeyCode::KeyO => {
+                            if is_pressed {
+                                self.show_wireframe = !self.show_wireframe;
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        _ => self
+                            .camera_controller
+                            .process_keyboard(key_code, is_pressed),
+                    },
+                    PhysicalKey::Unidentified(key_code) => {
+                        warn!("Unidentified KeyCode {:?}", key_code);
+                        false
+                    }
+                }
             }
 
             _ => false,
@@ -521,7 +562,7 @@ impl<'w> State<'w> {
         //     0,
         //     bytemuck::cast_slice(&[self.light_uniform]),
         // );
-        info!("delta: {:?}", dt);
+        // info!("delta: {:?}", dt);
 
         self.camera_controller.update_camera(&mut self.camera, dt);
         self.camera_uniform
@@ -575,30 +616,40 @@ impl<'w> State<'w> {
 
             render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
 
-            render_pass.set_pipeline(&self.light_render_pipeline);
-            render_pass.draw_light_model(
-                &self.obj_model,
-                &self.camera_bind_group,
-                &self.light_bind_group,
-            );
-
-            render_pass.set_pipeline(&self.render_pipeline);
             let instances = 0..self.instances.len() as u32;
 
-            // render_pass.draw_model_instanced(
+            if self.show_wireframe {
+                if let Some(wireframe) = &self.wireframe_render_pipeline {
+                    render_pass.set_pipeline(&wireframe.render_pipeline);
+                    render_pass.draw_wireframe_instanced(
+                        &self.obj_model,
+                        instances,
+                        &self.camera_bind_group,
+                    );
+                }
+            } else {
+                render_pass.set_pipeline(&self.light_render_pipeline);
+                render_pass.draw_light_model(
+                    &self.obj_model,
+                    &self.camera_bind_group,
+                    &self.light_bind_group,
+                );
+                render_pass.set_pipeline(&self.render_pipeline);
+                render_pass.draw_model_instanced(
+                    &self.obj_model,
+                    instances,
+                    &self.camera_bind_group,
+                    &self.light_bind_group,
+                );
+            }
+
+            // render_pass.draw_model_instanced_with_material(
             //     &self.obj_model,
+            //     &self.debug_material,
             //     instances,
             //     &self.camera_bind_group,
             //     &self.light_bind_group,
             // );
-
-            render_pass.draw_model_instanced_with_material(
-                &self.obj_model,
-                &self.debug_material,
-                instances,
-                &self.camera_bind_group,
-                &self.light_bind_group,
-            );
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
@@ -608,17 +659,18 @@ impl<'w> State<'w> {
     }
 }
 
-fn create_render_pipeline(
+pub fn create_render_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     color_format: wgpu::TextureFormat,
     depth_format: Option<wgpu::TextureFormat>,
     vertex_layouts: &[wgpu::VertexBufferLayout],
     shader: wgpu::ShaderModuleDescriptor,
+    label: &str,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(shader);
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Render Pipeline"),
+        label: Some(label),
         layout: Some(&layout),
         vertex: wgpu::VertexState {
             module: &shader,

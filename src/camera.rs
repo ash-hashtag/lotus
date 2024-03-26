@@ -116,29 +116,20 @@ impl CameraController {
         }
     }
 
-    pub fn process_keyboard(&mut self, event: &KeyEvent) -> bool {
-        let is_pressed = event.state == ElementState::Pressed;
+    pub fn process_keyboard(&mut self, key_code: KeyCode, is_pressed: bool) -> bool {
+        // let is_pressed = event.state == ElementState::Pressed;
         let amount = if is_pressed { 1.0 } else { 0.0 };
-        match event.physical_key {
-            winit::keyboard::PhysicalKey::Code(keycode) => {
-                match keycode {
-                    KeyCode::KeyA | KeyCode::ArrowLeft => self.amount_left = amount,
-                    KeyCode::KeyD | KeyCode::ArrowRight => self.amount_right = amount,
-                    KeyCode::KeyW | KeyCode::ArrowUp => self.amount_forward = amount,
-                    KeyCode::KeyS | KeyCode::ArrowDown => self.amount_backward = amount,
-                    KeyCode::KeyQ => self.amount_up = amount,
-                    KeyCode::KeyZ => self.amount_down = amount,
-                    _ => return false,
-                };
+        match key_code {
+            KeyCode::KeyA | KeyCode::ArrowLeft => self.amount_left = amount,
+            KeyCode::KeyD | KeyCode::ArrowRight => self.amount_right = amount,
+            KeyCode::KeyW | KeyCode::ArrowUp => self.amount_forward = amount,
+            KeyCode::KeyS | KeyCode::ArrowDown => self.amount_backward = amount,
+            KeyCode::KeyQ => self.amount_up = amount,
+            KeyCode::KeyZ => self.amount_down = amount,
+            _ => return false,
+        };
 
-                return true;
-            }
-            winit::keyboard::PhysicalKey::Unidentified(keycode) => {
-                warn!("Unidentifed KeyCode: {:?}", keycode)
-            }
-        }
-
-        false
+        return true;
     }
 
     pub fn process_mouse(&mut self, mouse_dx: f64, mouse_dy: f64) {
