@@ -1,4 +1,4 @@
-pub const NUM_INSTANCES_PER_ROW: u32 = 10;
+pub const NUM_INSTANCES_PER_ROW: u32 = 5;
 pub const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(
     NUM_INSTANCES_PER_ROW as f32 * 0.5,
     0.0,

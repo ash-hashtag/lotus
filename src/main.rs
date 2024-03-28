@@ -1,4 +1,4 @@
-use std::{time::Instant, str::FromStr};
+use std::time::Instant;
 
 use log::{error, info};
 use winit::{
@@ -16,7 +16,7 @@ mod ui;
 use state::State;
 
 fn main() {
-    fast_log::init(fast_log::Config::new().console().level(log::LevelFilter::Info));
+    let _ = fast_log::init(fast_log::Config::new().console().level(log::LevelFilter::Info)).unwrap();
     info!("Initiating...");
     let event_loop = EventLoop::new().unwrap();
     let window = WindowBuilder::new()

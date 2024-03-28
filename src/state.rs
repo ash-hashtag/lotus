@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use cgmath::{InnerSpace, Point3, Rotation3, Vector3, Zero};
+use cgmath::{Point3, Rotation3, Vector3};
 use image::GenericImageView;
 use log::{info, warn};
 use wgpu::util::DeviceExt;
@@ -17,7 +17,10 @@ use winit::{
 use crate::{
     camera::{Camera, CameraController, CameraUniform, Projection},
     pipelines::wireframe::{DrawWireframe, WireframeRenderPipeline},
-    ui::text::DebugOverlayNode,
+    ui::{
+        renderer::{UiNode, UiRenderer},
+        text::DebugOverlay,
+    },
     voxel::{
         instance::{Instance, InstanceRaw, INSTANCE_DISPLACEMENT, NUM_INSTANCES_PER_ROW},
         light::LightUniform,
@@ -28,7 +31,7 @@ use crate::{
 };
 
 pub struct State<'window> {
-    debug_overlay_node: Option<DebugOverlayNode<'static>>,
+    ui_renderer: UiRenderer,
     delta: Duration,
     surface: wgpu::Surface<'window>,
     window: &'window Window,
@@ -129,7 +132,7 @@ impl<'w> State<'w> {
             present_mode,
             desired_maximum_frame_latency: 2,
             alpha_mode,
-            view_formats: vec![],
+            view_formats: Vec::new(),
         };
 
         info!("WGPU CONFIG {:?}", config);
@@ -455,21 +458,12 @@ impl<'w> State<'w> {
 
         let show_wireframe = false;
 
-        let font_bytes = include_bytes!("../assets/fonts/DejaVuSans.ttf");
-
         let delta = Duration::ZERO;
 
-        let debug_overlay_node = Some(DebugOverlayNode::new(
-            font_bytes,
-            &device,
-            config.width,
-            config.height,
-            config.format,
-            [1.0f32; 4],
-        )?);
+        let ui_renderer = UiRenderer::new(&device, config.format, config.width, config.height);
 
         Ok(Self {
-            debug_overlay_node,
+            ui_renderer,
             delta,
             wireframe_render_pipeline,
             projection,
@@ -530,6 +524,7 @@ impl<'w> State<'w> {
 
             self.depth_texture =
                 texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+            self.ui_renderer.resize(new_size.width, new_size.height);
             self.surface.configure(&self.device, &self.config);
         }
     }
@@ -572,22 +567,7 @@ impl<'w> State<'w> {
     }
 
     pub fn update(&mut self, dt: Duration) {
-        // let old_position = Vector3::from(self.light_uniform.position);
-        // self.light_uniform.position =
-        //     (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0))
-        //         * old_position)
-        //         .into();
-
-        // self.queue.write_buffer(
-        //     &self.light_buffer,
-        //     0,
-        //     bytemuck::cast_slice(&[self.light_uniform]),
-        // );
-        // info!("delta: {:?}", dt);
         self.delta = dt;
-        if let Some(debug_overlay) = &mut self.debug_overlay_node {
-            debug_overlay.update(dt);
-        }
 
         self.camera_controller.update_camera(&mut self.camera, dt);
         self.camera_uniform
@@ -600,6 +580,9 @@ impl<'w> State<'w> {
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        if self.window.is_minimized().unwrap_or(false) {
+            return Ok(());
+        }
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -670,27 +653,20 @@ impl<'w> State<'w> {
         }
 
         {
-            let mut ui_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Ui Render Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+            let input = egui::RawInput::default();
+            let ctx = self.ui_renderer.context();
 
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
+            let full_output = ctx.run(input, |ctx| {
+                let frame = egui::Frame::default().fill(egui::Color32::TRANSPARENT);
+                let panel = egui::CentralPanel::default().frame(frame);
+
+                panel.show(ctx, |ui| {
+                    DebugOverlay { dt: self.delta }.add_ui(ui);
+                });
             });
-            {
-                if let Some(debug_overlay) = &mut self.debug_overlay_node {
-                    debug_overlay.queue(&self.device, &self.queue);
-                    debug_overlay.draw(&mut ui_render_pass);
-                }
-            }
+
+            self.ui_renderer
+                .draw(full_output, &self.device, &self.queue, &mut encoder, &view);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
