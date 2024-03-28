@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use image::GenericImageView;
+use image::{EncodableLayout, GenericImageView};
 use log::info;
 
 #[derive(Debug)]
@@ -88,25 +88,19 @@ impl Texture {
         Ok(Self::from_image(device, queue, &img, label, is_normal_map))
     }
 
-    pub fn from_image(
+    pub fn create_texture(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        img: &image::DynamicImage,
+        size: (u32, u32),
+        rgba: &[u8],
+        format: wgpu::TextureFormat,
         label: &str,
-        is_normal_map: bool,
     ) -> Self {
-        let rgba = img.to_rgba8();
-        let (width, height) = img.dimensions();
+        let (width, height) = size;
         let size = wgpu::Extent3d {
             width,
             height,
             depth_or_array_layers: 1,
-        };
-
-        let format = if is_normal_map {
-            wgpu::TextureFormat::Rgba8Unorm
-        } else {
-            wgpu::TextureFormat::Rgba8UnormSrgb
         };
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -153,5 +147,54 @@ impl Texture {
             view,
             sampler,
         }
+    }
+
+    pub fn default_normal_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let rgba = [128, 128, 255, 255];
+
+        return Self::create_texture(
+            device,
+            queue,
+            (1, 1),
+            &rgba,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "Default Normal Texture",
+        );
+    }
+
+    pub fn default_diffuse_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let rgba = [128, 128, 255, 255];
+
+        return Self::create_texture(
+            device,
+            queue,
+            (1, 1),
+            &rgba,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            "Default Diffuse Texture",
+        );
+    }
+
+    pub fn from_image(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        img: &image::DynamicImage,
+        label: &str,
+        is_normal_map: bool,
+    ) -> Self {
+        let format = if is_normal_map {
+            wgpu::TextureFormat::Rgba8Unorm
+        } else {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        };
+
+        Self::create_texture(
+            device,
+            queue,
+            img.dimensions(),
+            img.to_rgba8().as_bytes(),
+            format,
+            label,
+        )
     }
 }

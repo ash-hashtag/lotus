@@ -5,10 +5,10 @@ use std::{
 
 use anyhow::{anyhow, Context};
 use cgmath::{Point3, Rotation3, Vector3};
-use image::GenericImageView;
 use log::{info, warn};
 use wgpu::util::DeviceExt;
 use winit::{
+    dpi::{LogicalPosition, PhysicalPosition},
     event::{ElementState, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
@@ -19,6 +19,7 @@ use crate::{
     pipelines::wireframe::{DrawWireframe, WireframeRenderPipeline},
     ui::{
         renderer::{UiNode, UiRenderer},
+        settings::SettingsNode,
         text::DebugOverlay,
     },
     voxel::{
@@ -30,15 +31,23 @@ use crate::{
     },
 };
 
+pub struct RenderTarget<'a> {
+    pub window: &'a Window,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
 pub struct State<'window> {
+    render_target: RenderTarget<'window>,
+    default_material: Material,
+
+    settings: SettingsNode,
+    show_settings: bool,
     ui_renderer: UiRenderer,
     delta: Duration,
     surface: wgpu::Surface<'window>,
-    window: &'window Window,
 
     size: winit::dpi::PhysicalSize<u32>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
 
     render_pipeline: wgpu::RenderPipeline,
@@ -70,10 +79,8 @@ pub struct State<'window> {
     last_draw_call_ts: Instant,
 
     debug_material: Material,
-    mouse_pressed: bool,
 
     wireframe_render_pipeline: Option<WireframeRenderPipeline>,
-    show_wireframe: bool,
 }
 impl<'w> State<'w> {
     pub async fn new(window: &'w Window) -> anyhow::Result<Self> {
@@ -139,47 +146,6 @@ impl<'w> State<'w> {
 
         surface.configure(&device, &config);
 
-        let diffuse_bytes = tokio::fs::read("assets/images/happy-tree.png").await?;
-        let diffuse_image = image::load_from_memory(&diffuse_bytes)?;
-        let diffuse_rgba = diffuse_image.to_rgba8();
-
-        let dimensions = diffuse_image.dimensions();
-
-        let texture_size = wgpu::Extent3d {
-            width: dimensions.0,
-            height: dimensions.1,
-            depth_or_array_layers: 1,
-        };
-
-        let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: texture_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            label: Some("diffuse_texture"),
-            view_formats: &[],
-        });
-
-        queue.write_texture(
-            wgpu::ImageCopyTexture {
-                texture: &diffuse_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &diffuse_rgba,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * dimensions.0),
-                rows_per_image: Some(dimensions.1),
-            },
-            texture_size,
-        );
-        let shader_code = tokio::fs::read_to_string("assets/shaders/shader.wgsl").await?;
-        let light_shader_code = tokio::fs::read_to_string("assets/shaders/light.wgsl").await?;
-
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -218,23 +184,22 @@ impl<'w> State<'w> {
                 ],
                 label: Some("texture_bind_group_layout"),
             });
+        let (shader_code, light_shader_code) = futures::future::try_join(
+            tokio::fs::read_to_string("assets/shaders/shader.wgsl"),
+            tokio::fs::read_to_string("assets/shaders/light.wgsl"),
+        )
+        .await?;
 
-        // let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        //     layout: &texture_bind_group_layout,
-        //     entries: &[
-        //         wgpu::BindGroupEntry {
-        //             binding: 0,
-        //             resource: wgpu::BindingResource::TextureView(&diffuse_texture_view),
-        //         },
-        //         wgpu::BindGroupEntry {
-        //             binding: 1,
-        //             resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
-        //         },
-        //     ],
-        //     label: Some("diffuse_bind_group"),
-        // });
+        let obj_model = Model::load_obj_model_from_file_path(
+            "assets/models/plane_cube.obj".into(),
+            &device,
+            &queue,
+            &texture_bind_group_layout,
+        )
+        .await?;
 
-        info!("Loading shader \n{}\n", shader_code);
+        let default_material =
+            Material::default_material(&device, &queue, &texture_bind_group_layout);
 
         let shader = wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
@@ -279,14 +244,6 @@ impl<'w> State<'w> {
 
                         Instance { position, rotation }
                     })
-                    // let rotation = if position.is_zero() {
-                    //     cgmath::Quaternion::from_axis_angle(
-                    //         cgmath::Vector3::unit_z(),
-                    //         cgmath::Deg(0.0),
-                    //     )
-                    // } else {
-                    //     cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-                    // };
                 })
             })
             .collect();
@@ -419,16 +376,6 @@ impl<'w> State<'w> {
             "Render Pipeline",
         );
 
-        let obj_model = Model::load_obj_model_from_file_path(
-            "assets/models/plane_cube.obj".into(),
-            &device,
-            &queue,
-            &texture_bind_group_layout,
-        )
-        .await?;
-
-        dbg!(&obj_model);
-
         let last_draw_call_ts = Instant::now();
 
         let debug_material = {
@@ -456,22 +403,30 @@ impl<'w> State<'w> {
             )
         };
 
-        let show_wireframe = false;
-
         let delta = Duration::ZERO;
 
-        let ui_renderer = UiRenderer::new(&device, config.format, config.width, config.height);
+        let ui_renderer =
+            UiRenderer::new(&window, &device, config.format, config.width, config.height);
+        let show_settings = false;
+        let settings = SettingsNode::default();
+
+        window.set_cursor_visible(false);
+        let render_target = RenderTarget {
+            window,
+            device,
+            queue,
+        };
 
         Ok(Self {
+            default_material,
+            render_target,
+            settings,
             ui_renderer,
             delta,
             wireframe_render_pipeline,
             projection,
             debug_material,
-            window,
             surface,
-            device,
-            queue,
             config,
             size,
             render_pipeline,
@@ -500,14 +455,13 @@ impl<'w> State<'w> {
             light_bind_group,
 
             last_draw_call_ts,
-            mouse_pressed: false,
 
-            show_wireframe,
+            show_settings,
         })
     }
 
     pub fn window(&self) -> &Window {
-        &self.window
+        &self.render_target.window
     }
 
     pub fn size(&self) -> winit::dpi::PhysicalSize<u32> {
@@ -522,38 +476,53 @@ impl<'w> State<'w> {
 
             self.projection.resize(new_size.width, new_size.height);
 
-            self.depth_texture =
-                texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+            self.depth_texture = texture::Texture::create_depth_texture(
+                &self.render_target.device,
+                &self.config,
+                "depth_texture",
+            );
+
             self.ui_renderer.resize(new_size.width, new_size.height);
-            self.surface.configure(&self.device, &self.config);
+            self.surface
+                .configure(&self.render_target.device, &self.config);
         }
     }
 
-    pub fn input(&mut self, event: &WindowEvent) -> bool {
-        match event {
+    pub fn input(&mut self, window_event: &WindowEvent) -> bool {
+        let ui_consumed = self
+            .ui_renderer
+            .on_event(self.render_target.window, window_event);
+        match window_event {
             WindowEvent::MouseWheel { delta, .. } => {
                 self.camera_controller.process_scroll(delta);
                 true
             }
-            WindowEvent::MouseInput { state, .. } => {
-                self.mouse_pressed = *state == ElementState::Pressed;
-                true
-            }
+            // WindowEvent::MouseInput { state, .. } => {
+            //     false
+            // }
             WindowEvent::KeyboardInput { event, .. } => {
                 let is_pressed = event.state == ElementState::Pressed;
                 match event.physical_key {
                     PhysicalKey::Code(key_code) => match key_code {
-                        KeyCode::KeyO => {
+                        KeyCode::Escape => {
                             if is_pressed {
-                                self.show_wireframe = !self.show_wireframe;
-                                true
-                            } else {
-                                false
+                                self.show_settings = !self.show_settings;
+                                if self.show_settings {
+                                    self.show_cursor();
+                                } else {
+                                    self.hide_cursor();
+                                }
                             }
+
+                            true
                         }
-                        _ => self
-                            .camera_controller
-                            .process_keyboard(key_code, is_pressed),
+                        _ => {
+                            let camera_consumed = self
+                                .camera_controller
+                                .process_keyboard(key_code, is_pressed);
+
+                            camera_consumed || ui_consumed
+                        }
                     },
                     PhysicalKey::Unidentified(key_code) => {
                         warn!("Unidentified KeyCode {:?}", key_code);
@@ -566,21 +535,47 @@ impl<'w> State<'w> {
         }
     }
 
+    pub fn show_cursor(&self) {
+        let size = self.size();
+
+        self.render_target
+            .window
+            .set_cursor_position(PhysicalPosition::new(size.width / 2, size.height / 2))
+            .unwrap();
+        self.render_target.window.set_cursor_visible(true);
+    }
+
+    pub fn hide_cursor(&self) {
+        self.render_target.window.set_cursor_visible(false);
+    }
+
     pub fn update(&mut self, dt: Duration) {
         self.delta = dt;
 
         self.camera_controller.update_camera(&mut self.camera, dt);
         self.camera_uniform
             .update_view_proj(&self.camera, &self.projection);
-        self.queue.write_buffer(
+        self.render_target.queue.write_buffer(
             &self.camera_buffer,
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
+
+        if self.settings.full_screen {
+            if self.render_target.window.fullscreen().is_none() {
+                self.render_target
+                    .window
+                    .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
+            }
+        } else {
+            if self.render_target.window.fullscreen().is_some() {
+                self.render_target.window.set_fullscreen(None);
+            }
+        }
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        if self.window.is_minimized().unwrap_or(false) {
+        if self.render_target.window.is_minimized().unwrap_or(false) {
             return Ok(());
         }
         let output = self.surface.get_current_texture()?;
@@ -588,11 +583,12 @@ impl<'w> State<'w> {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
+        let mut encoder =
+            self.render_target
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder"),
+                });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -626,7 +622,7 @@ impl<'w> State<'w> {
 
             let instances = 0..self.instances.len() as u32;
 
-            if self.show_wireframe {
+            if self.settings.show_wireframe {
                 if let Some(wireframe) = &self.wireframe_render_pipeline {
                     render_pass.set_pipeline(&wireframe.render_pipeline);
                     render_pass.draw_wireframe_instanced(
@@ -643,8 +639,15 @@ impl<'w> State<'w> {
                     &self.light_bind_group,
                 );
                 render_pass.set_pipeline(&self.render_pipeline);
-                render_pass.draw_model_instanced(
+                // render_pass.draw_model_instanced(
+                //     &self.obj_model,
+                //     instances,
+                //     &self.camera_bind_group,
+                //     &self.light_bind_group,
+                // );
+                render_pass.draw_model_instanced_with_material(
                     &self.obj_model,
+                    &self.default_material,
                     instances,
                     &self.camera_bind_group,
                     &self.light_bind_group,
@@ -653,23 +656,20 @@ impl<'w> State<'w> {
         }
 
         {
-            let input = egui::RawInput::default();
-            let ctx = self.ui_renderer.context();
-
-            let full_output = ctx.run(input, |ctx| {
-                let frame = egui::Frame::default().fill(egui::Color32::TRANSPARENT);
-                let panel = egui::CentralPanel::default().frame(frame);
-
-                panel.show(ctx, |ui| {
-                    DebugOverlay { dt: self.delta }.add_ui(ui);
-                });
-            });
-
             self.ui_renderer
-                .draw(full_output, &self.device, &self.queue, &mut encoder, &view);
+                .draw(&self.render_target, &mut encoder, &view, |ui| {
+                    if self.settings.show_fps {
+                        DebugOverlay { dt: self.delta }.add_ui(ui);
+                    }
+                    if self.show_settings {
+                        self.settings.add_ui(ui);
+                    }
+                });
         }
 
-        self.queue.submit(std::iter::once(encoder.finish()));
+        self.render_target
+            .queue
+            .submit(std::iter::once(encoder.finish()));
         output.present();
 
         Ok(())

@@ -12,7 +12,6 @@ cgmath = "0.18.0"
 egui = "0.27.0"
 egui-wgpu = "0.27.0"
 egui-winit = "0.27.0"
-epaint = "0.27.0"
 fast_log = "1.6.16"
 futures = "0.3.30"
 gltf = "1.4.0"
@@ -24,5 +23,4 @@ serde_json = "1.0.115"
 tobj = { version = "4.0.1", features = ["async"] }
 tokio = { version = "1.36.0", features = ["full"] }
 wgpu = "0.19.3"
-wgpu_text = "0.8.6"
 winit = "0.29.15"

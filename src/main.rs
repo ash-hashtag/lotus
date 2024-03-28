@@ -13,6 +13,7 @@ mod voxel;
 mod pipelines;
 mod app_config;
 mod ui;
+mod ecs;
 use state::State;
 
 fn main() {
@@ -85,5 +86,4 @@ fn main() {
         })
         .unwrap();
 
-    info!("Event Loop Out");
 }

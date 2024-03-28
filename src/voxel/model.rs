@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Context};
-use log::{error, info};
+use log::error;
 use std::{
     io::{BufReader, Cursor},
     ops::Range,
@@ -24,6 +24,19 @@ pub struct Material {
 }
 
 impl Material {
+    pub fn default_material(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+    ) -> Self {
+        let diffuse_texture = texture::Texture::default_diffuse_texture(device, queue);
+        let normal_texture = texture::Texture::default_normal_texture(device, queue);
+
+        let name = "Default Material";
+
+        Self::new(device, name, diffuse_texture, normal_texture, layout)
+    }
+
     pub fn new(
         device: &wgpu::Device,
         name: impl Into<String>,
@@ -124,18 +137,19 @@ impl Model {
             )
             .await?;
 
-            let normal_texture_file_path = parent_dir.join(
-                m.normal_texture
-                    .with_context(|| anyhow!("No Normal texture found"))?,
-            );
+            let normal_texture = if let Some(normal_texture_path) = m.normal_texture {
+                let normal_texture_file_path = parent_dir.join(normal_texture_path);
 
-            let normal_texture = texture::Texture::from_file_path(
-                device,
-                queue,
-                normal_texture_file_path.as_path(),
-                true,
-            )
-            .await?;
+                texture::Texture::from_file_path(
+                    device,
+                    queue,
+                    normal_texture_file_path.as_path(),
+                    true,
+                )
+                .await?
+            } else {
+                texture::Texture::default_normal_texture(device, queue)
+            };
 
             let material = Material::new(device, m.name, diffuse_texture, normal_texture, layout);
 

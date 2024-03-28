@@ -1,7 +1,14 @@
+use egui_wgpu::RenderState;
+use wgpu::{
+    util::DeviceExt, BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry,
+    BufferUsages, ShaderStages,
+};
+
 use crate::{
     state::create_render_pipeline,
     voxel::{
         instance::InstanceRaw,
+        model::Model,
         vertex::{ModelVertex, Vertex},
     },
 };
@@ -26,6 +33,7 @@ pub struct Renderer {
 impl Renderer {
     pub async fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         camera_bind_group_layout: &wgpu::BindGroupLayout,
     ) -> anyhow::Result<Self> {
@@ -48,24 +56,8 @@ impl Renderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
                 ],
-                label: Some("model_texture_bind_group_layout"),
+                label: Some("voxel_texture_bind_group_layout"),
             });
 
         let render_pipeline_layout =
@@ -74,7 +66,7 @@ impl Renderer {
                 bind_group_layouts: &[&texture_bind_group_layout, &camera_bind_group_layout],
                 push_constant_ranges: &[],
             });
-        let shader_code = tokio::fs::read_to_string("assets/shaders/model_shader.wgsl").await?;
+        let shader_code = tokio::fs::read_to_string("assets/shaders/voxel_shader.wgsl").await?;
         let shader = wgpu::ShaderModuleDescriptor {
             label: Some("Model Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_code.into()),
@@ -86,8 +78,19 @@ impl Renderer {
             Some(texture::Texture::DEPTH_FORMAT),
             &[ModelVertex::desc(), InstanceRaw::desc()],
             shader,
-            "Model Render Pipeline",
+            "Voxel Render Pipeline",
         );
+
+        let obj_model = Model::load_obj_model_from_file_path(
+            "assets/models/plane_cube.obj".into(),
+            device,
+            queue,
+            &texture_bind_group_layout,
+        )
+        .await?;
+
         todo!()
     }
+
+    pub fn render(&mut self) {}
 }

@@ -7,7 +7,7 @@ pub struct DebugOverlay {
 }
 
 impl UiNode for DebugOverlay {
-    fn add_ui(&self, ui: &mut egui::Ui) {
+    fn add_ui(&mut self, ui: &mut egui::Ui) {
         let fps = (1.0 / self.dt.as_secs_f32()).floor();
         let fps_text = format!("FPS: {fps}");
         let text = egui::RichText::new(fps_text)
