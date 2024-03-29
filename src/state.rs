@@ -4,11 +4,11 @@ use std::{
 };
 
 use anyhow::{anyhow, Context};
-use cgmath::{Point3, Rotation3, Vector3};
+use cgmath::{Array, Deg, Point3, Quaternion, Rotation3, Vector3};
 use log::{info, warn};
-use wgpu::util::DeviceExt;
+use wgpu::{util::DeviceExt, PolygonMode, RenderPipeline};
 use winit::{
-    dpi::{LogicalPosition, PhysicalPosition},
+    dpi::PhysicalPosition,
     event::{ElementState, WindowEvent},
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
@@ -16,7 +16,7 @@ use winit::{
 
 use crate::{
     camera::{Camera, CameraController, CameraUniform, Projection},
-    ecs::ecs::{ResId, World},
+    ecs::ecs::{Res, World},
     ui::{
         renderer::{UiNode, UiRenderer},
         settings::SettingsNode,
@@ -25,10 +25,10 @@ use crate::{
     voxel::{
         instance::{Instance, InstanceRaw, INSTANCE_DISPLACEMENT, NUM_INSTANCES_PER_ROW},
         light::LightUniform,
-        model::{DrawModel, Material, Model},
-        plane::{Plane, PlaneRenderer},
+        model::{Material, Model},
+        plane::Plane,
         texture,
-        vertex::{ModelVertex, Vertex, INDICES, VERTICES},
+        vertex::{ModelVertex, PrimitiveRenderer, Vertex},
     },
 };
 
@@ -39,10 +39,12 @@ pub struct RenderTarget<'a> {
 }
 
 pub struct State<'window> {
-    plane_renderer: PlaneRenderer,
-    world: World,
+    wireframe_render_pipeline: RenderPipeline,
+    render_pipeline: RenderPipeline,
+    noise_render_pipeline: RenderPipeline,
+    plane_renderer: PrimitiveRenderer,
     render_target: RenderTarget<'window>,
-    default_material: ResId<Material>,
+    default_material: Res<Material>,
 
     settings: SettingsNode,
     show_settings: bool,
@@ -52,8 +54,6 @@ pub struct State<'window> {
 
     size: winit::dpi::PhysicalSize<u32>,
     config: wgpu::SurfaceConfiguration,
-
-    render_pipeline: wgpu::RenderPipeline,
 
     camera: Camera,
     projection: Projection,
@@ -67,16 +67,12 @@ pub struct State<'window> {
 
     depth_texture: texture::Texture,
 
-    obj_model: ResId<Model>,
+    obj_model: Res<Model>,
     light_buffer: wgpu::Buffer,
     light_uniform: LightUniform,
     light_bind_group: wgpu::BindGroup,
 
     last_draw_call_ts: Instant,
-
-    debug_material: Material,
-
-    wireframe_render_pipeline: wgpu::RenderPipeline,
 }
 impl<'w> State<'w> {
     pub async fn new(window: &'w Window) -> anyhow::Result<Self> {
@@ -188,21 +184,20 @@ impl<'w> State<'w> {
 
         let mut world = World::default();
 
+        let default_material =
+            Material::default_material(&device, &queue, &texture_bind_group_layout);
+
+        let default_material = Res::new(default_material);
         let obj_model = Model::load_obj_model_from_file_path(
             "assets/models/plane_cube.obj".into(),
             &device,
             &queue,
             &texture_bind_group_layout,
-            &mut world,
+            default_material.clone(),
         )
         .await?;
 
-        let obj_model = world.insert(obj_model);
-
-        let default_material =
-            Material::default_material(&device, &queue, &texture_bind_group_layout);
-
-        let default_material = world.insert(default_material);
+        let obj_model = Res::new(obj_model);
 
         let shader = wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
@@ -245,7 +240,13 @@ impl<'w> State<'w> {
                             cgmath::Deg(0.0),
                         );
 
-                        Instance { position, rotation }
+                        let scale = cgmath::Vector3::new(1.0, 1.0, 1.0);
+
+                        Instance {
+                            position,
+                            rotation,
+                            scale,
+                        }
                     })
                 })
             })
@@ -336,7 +337,7 @@ impl<'w> State<'w> {
             &[ModelVertex::desc(), InstanceRaw::desc()],
             &shader,
             "Render Pipeline",
-            false,
+            RenderPipeLineType::Default,
         );
         let wireframe_render_pipeline = create_render_pipeline(
             &device,
@@ -346,35 +347,21 @@ impl<'w> State<'w> {
             &[ModelVertex::desc(), InstanceRaw::desc()],
             &shader,
             "Wireframe Render Pipeline",
-            true,
+            RenderPipeLineType::Wireframe,
+        );
+
+        let noise_render_pipeline = create_render_pipeline(
+            &device,
+            &render_pipeline_layout,
+            config.format,
+            Some(texture::Texture::DEPTH_FORMAT),
+            &[ModelVertex::desc(), InstanceRaw::desc()],
+            &shader,
+            "Noise Render Pipeline",
+            RenderPipeLineType::Noise,
         );
 
         let last_draw_call_ts = Instant::now();
-
-        let debug_material = {
-            let diffuse_texture = texture::Texture::from_file_path(
-                &device,
-                &queue,
-                &Path::new("assets/models/cobble-diffuse-resized.png"),
-                false,
-            )
-            .await?;
-            let normal_texture = texture::Texture::from_file_path(
-                &device,
-                &queue,
-                &Path::new("assets/models/cobble-normal-resized.png"),
-                true,
-            )
-            .await?;
-
-            Material::new(
-                &device,
-                "debug-material",
-                diffuse_texture,
-                normal_texture,
-                &texture_bind_group_layout,
-            )
-        };
 
         let delta = Duration::ZERO;
 
@@ -383,16 +370,14 @@ impl<'w> State<'w> {
         let show_settings = false;
         let settings = SettingsNode::default();
 
-        let plane_renderer = PlaneRenderer::new(
-            Plane::new(
-                Vector3::new(0.0, 0.0, 0.0),
-                (100.0, 100.0),
-                Vector3::unit_z(),
-            ),
-            &device,
-            &mut world,
-            default_material,
-        );
+        let plane_instance = Instance {
+            position: Vector3::from_value(0.0),
+            rotation: Quaternion::from_axis_angle(Vector3::unit_y(), Deg(0.0)),
+            scale: Vector3::from_value(10.0),
+        };
+
+        let plane_renderer = PrimitiveRenderer::new::<Plane>(&device, &[plane_instance]);
+
         window.set_cursor_visible(false);
         let render_target = RenderTarget {
             window,
@@ -401,8 +386,8 @@ impl<'w> State<'w> {
         };
 
         Ok(Self {
+            noise_render_pipeline,
             plane_renderer,
-            world,
             default_material,
             render_target,
             settings,
@@ -410,7 +395,6 @@ impl<'w> State<'w> {
             delta,
             wireframe_render_pipeline,
             projection,
-            debug_material,
             surface,
             config,
             size,
@@ -603,28 +587,43 @@ impl<'w> State<'w> {
                 timestamp_writes: None,
             });
 
-            render_pass.set_vertex_buffer(1, self.plane_renderer.instances_buffer.slice(..));
-
             if self.settings.show_wireframe {
                 render_pass.set_pipeline(&self.wireframe_render_pipeline);
+            } else if self.settings.show_noise {
+                render_pass.set_pipeline(&self.noise_render_pipeline);
             } else {
                 render_pass.set_pipeline(&self.render_pipeline);
             }
-            self.plane_renderer.draw(
+
+            // self.triangle_renderer.draw_with_material(
+            //     &self.default_material,
+            //     &mut render_pass,
+            //     &self.camera_bind_group,
+            //     &self.light_bind_group,
+            // );
+            let material = &self.obj_model.materials[0];
+            self.plane_renderer.draw_with_material(
+                &material,
                 &mut render_pass,
                 &self.camera_bind_group,
                 &self.light_bind_group,
-                &self.world,
             );
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            let instances = 0..self.instances.len() as u32;
-            render_pass.draw_model_instanced(
-                &self.obj_model,
-                instances,
-                &self.camera_bind_group,
-                &self.light_bind_group,
-                &self.world,
-            );
+            // render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            // let instances = 0..self.instances.len() as u32;
+
+            // self.obj_model.draw(
+            //     instances,
+            //     &mut render_pass,
+            //     &self.camera_bind_group,
+            //     &self.light_bind_group,
+            // );
+            // render_pass.draw_model_instanced(
+            //     &self.obj_model,
+            //     instances,
+            //     &self.camera_bind_group,
+            //     &self.light_bind_group,
+            //     &self.world,
+            // );
         }
 
         {
@@ -648,6 +647,12 @@ impl<'w> State<'w> {
     }
 }
 
+pub enum RenderPipeLineType {
+    Default,
+    Wireframe,
+    Noise,
+}
+
 pub fn create_render_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -656,8 +661,18 @@ pub fn create_render_pipeline(
     vertex_layouts: &[wgpu::VertexBufferLayout],
     shader: &wgpu::ShaderModule,
     label: &str,
-    is_wireframe: bool,
+    ty: RenderPipeLineType,
 ) -> wgpu::RenderPipeline {
+    let fragment_entry_point = match ty {
+        RenderPipeLineType::Default => "fs_main",
+        RenderPipeLineType::Wireframe => "fs_main_wf",
+        RenderPipeLineType::Noise => "fs_main_noise",
+    };
+    let polygon_mode = if matches!(ty, RenderPipeLineType::Wireframe) {
+        PolygonMode::Line
+    } else {
+        PolygonMode::Fill
+    };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(&layout),
@@ -668,11 +683,7 @@ pub fn create_render_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: if is_wireframe {
-                "fs_main_wf"
-            } else {
-                "fs_main"
-            },
+            entry_point: fragment_entry_point,
             targets: &[Some(color_format.into())],
         }),
         primitive: wgpu::PrimitiveState {
@@ -680,11 +691,7 @@ pub fn create_render_pipeline(
             strip_index_format: None,
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: Some(wgpu::Face::Back),
-            polygon_mode: if is_wireframe {
-                wgpu::PolygonMode::Line
-            } else {
-                wgpu::PolygonMode::Fill
-            },
+            polygon_mode,
             unclipped_depth: false,
             conservative: false,
         },

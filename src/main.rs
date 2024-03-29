@@ -14,6 +14,7 @@ mod pipelines;
 mod app_config;
 mod ui;
 mod ecs;
+mod noise;
 use state::State;
 
 fn main() {

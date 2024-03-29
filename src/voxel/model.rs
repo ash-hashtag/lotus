@@ -5,16 +5,16 @@ use std::{
     ops::Range,
     path::PathBuf,
 };
-use wgpu::util::DeviceExt;
+use wgpu::{util::DeviceExt, BindGroup, RenderPass};
 
-use crate::ecs::ecs::{ResId, World};
+use crate::ecs::ecs::Res;
 
 use super::{texture, vertex::ModelVertex};
 
 #[derive(Debug)]
 pub struct Model {
-    pub meshes: Vec<ResId<Mesh>>,
-    pub materials: Vec<ResId<Material>>,
+    pub meshes: Vec<Res<Mesh>>,
+    pub materials: Vec<Res<Material>>,
 }
 
 #[derive(Debug)]
@@ -85,7 +85,39 @@ pub struct Mesh {
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_elements: u32,
-    pub material: usize,
+    pub material: Res<Material>,
+}
+
+impl Mesh {
+    pub fn draw<'a>(
+        &'a self,
+        instances: Range<u32>,
+        rp: &mut RenderPass<'a>,
+        camera_bind_group: &'a BindGroup,
+        light_bind_group: &'a BindGroup,
+    ) {
+        rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        rp.set_bind_group(0, &self.material.bind_group, &[]);
+        rp.set_bind_group(1, camera_bind_group, &[]);
+        rp.set_bind_group(2, light_bind_group, &[]);
+        rp.draw_indexed(0..self.num_elements, 0, instances);
+    }
+    pub fn draw_with_material<'a>(
+        &'a self,
+        material: &'a Material,
+        instances: Range<u32>,
+        rp: &mut RenderPass<'a>,
+        camera_bind_group: &'a BindGroup,
+        light_bind_group: &'a BindGroup,
+    ) {
+        rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        rp.set_bind_group(0, &material.bind_group, &[]);
+        rp.set_bind_group(1, camera_bind_group, &[]);
+        rp.set_bind_group(2, light_bind_group, &[]);
+        rp.draw_indexed(0..self.num_elements, 0, instances);
+    }
 }
 
 impl Model {
@@ -94,7 +126,7 @@ impl Model {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
-        world: &mut World,
+        default_material: Res<Material>,
     ) -> anyhow::Result<Self> {
         let parent_dir = file_path
             .parent()
@@ -156,9 +188,7 @@ impl Model {
 
             let material = Material::new(device, m.name, diffuse_texture, normal_texture, layout);
 
-            let material_id = world.insert(material);
-
-            materials.push(material_id);
+            materials.push(Res::new(material));
         }
 
         for m in obj_models {
@@ -171,14 +201,6 @@ impl Model {
                         m.mesh.positions[i * 3 + 2],
                     ],
                     tex_coords: [m.mesh.texcoords[i * 2], 1.0 - m.mesh.texcoords[i * 2 + 1]],
-                    // normal: [
-                    //     m.mesh.normals[i * 3],
-                    //     m.mesh.normals[i * 3 + 1],
-                    //     m.mesh.normals[i * 3 + 2],
-                    // ],
-
-                    // tangent: [0.0; 3],
-                    // bitangent: [0.0; 3],
                 };
 
                 vertices.push(vertex);
@@ -202,112 +224,27 @@ impl Model {
                 vertex_buffer,
                 index_buffer,
                 num_elements: m.mesh.indices.len() as _,
-                material: m.mesh.material_id.unwrap_or(0),
+                material: materials
+                    .get(m.mesh.material_id.unwrap_or(0))
+                    .unwrap_or(&default_material)
+                    .clone(),
             };
 
-            let mesh_id = world.insert(mesh);
-
-            meshes.push(mesh_id);
+            meshes.push(Res::new(mesh));
         }
 
         Ok(Self { materials, meshes })
     }
-}
 
-pub trait DrawModel<'a> {
-    fn draw_mesh_instanced(
-        &mut self,
-        mesh: &'a Mesh,
-        material: &'a Material,
+    pub fn draw<'a>(
+        &'a self,
         instances: Range<u32>,
-        camera_bind_group: &'a wgpu::BindGroup,
-        light_bind_group: &'a wgpu::BindGroup,
-    );
-
-    fn draw_model_instanced(
-        &mut self,
-        model: &ResId<Model>,
-        instances: Range<u32>,
-        camera_bind_group: &'a wgpu::BindGroup,
-        light_bind_group: &'a wgpu::BindGroup,
-        world: &'a World,
-    );
-
-    fn draw_model_instanced_with_material(
-        &mut self,
-        model: &ResId<Model>,
-        material: &ResId<Material>,
-        instances: Range<u32>,
-        camera_bind_group: &'a wgpu::BindGroup,
-        light_bind_group: &'a wgpu::BindGroup,
-        world: &'a World,
-    );
-}
-
-impl<'a, 'b> DrawModel<'b> for wgpu::RenderPass<'a>
-where
-    'b: 'a,
-{
-    fn draw_mesh_instanced(
-        &mut self,
-        mesh: &'a Mesh,
-        material: &'a Material,
-        instances: Range<u32>,
+        rp: &mut RenderPass<'a>,
         camera_bind_group: &'a wgpu::BindGroup,
         light_bind_group: &'a wgpu::BindGroup,
     ) {
-        self.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
-        self.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        self.set_bind_group(0, &material.bind_group, &[]);
-        self.set_bind_group(1, camera_bind_group, &[]);
-        self.set_bind_group(2, light_bind_group, &[]);
-        self.draw_indexed(0..mesh.num_elements, 0, instances);
-    }
-
-    fn draw_model_instanced(
-        &mut self,
-        model_id: &ResId<Model>,
-        instances: Range<u32>,
-        camera_bind_group: &'b wgpu::BindGroup,
-        light_bind_group: &'a wgpu::BindGroup,
-        world: &'a World,
-    ) {
-        let model = world.get(model_id).unwrap();
-        for mesh_id in model.meshes.iter() {
-            let mesh = world.get(mesh_id).unwrap();
-            let material_id = &model.materials[mesh.material];
-            let material = world.get(material_id).unwrap();
-            self.draw_mesh_instanced(
-                mesh,
-                material,
-                instances.clone(),
-                camera_bind_group,
-                light_bind_group,
-            );
-        }
-    }
-
-    fn draw_model_instanced_with_material(
-        &mut self,
-        model: &ResId<Model>,
-        material: &ResId<Material>,
-        instances: Range<u32>,
-        camera_bind_group: &'b wgpu::BindGroup,
-        light_bind_group: &'b wgpu::BindGroup,
-
-        world: &'a World,
-    ) {
-        let material = world.get(material).unwrap();
-        let model = world.get(model).unwrap();
-        for mesh_id in model.meshes.iter() {
-            let mesh = world.get(mesh_id).unwrap();
-            self.draw_mesh_instanced(
-                mesh,
-                material,
-                instances.clone(),
-                camera_bind_group,
-                light_bind_group,
-            );
+        for mesh in self.meshes.iter() {
+            mesh.draw(instances.clone(), rp, camera_bind_group, light_bind_group);
         }
     }
 }

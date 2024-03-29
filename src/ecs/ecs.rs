@@ -6,8 +6,25 @@ use std::{
     rc::Rc,
 };
 
+#[derive(Debug)]
 pub struct Res<T> {
     inner: Rc<T>,
+}
+
+impl<T> Clone for Res<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
+impl<T> Res<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            inner: Rc::new(value),
+        }
+    }
 }
 
 impl<T> Deref for Res<T> {
