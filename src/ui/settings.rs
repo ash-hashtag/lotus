@@ -14,34 +14,8 @@ impl UiNode for SettingsNode {
             .color(egui::Color32::WHITE);
 
         ui.label(settings_header);
-        if !self.show_fps {
-            if ui.button("Show FPS").clicked() {
-                self.show_fps = true;
-            }
-        } else {
-            if ui.button("Hide FPS").clicked() {
-                self.show_fps = false;
-            }
-        }
-
-        if !self.show_wireframe {
-            if ui.button("Show Wireframe").clicked() {
-                self.show_wireframe = true;
-            }
-        } else {
-            if ui.button("Hide Wireframe").clicked() {
-                self.show_wireframe = false;
-            }
-        }
-
-        if !self.full_screen {
-            if ui.button("Toggle Full Screen").clicked() {
-                self.full_screen = true;
-            }
-        } else {
-            if ui.button("Untoggle Full Screen").clicked() {
-                self.full_screen = false;
-            }
-        }
+        ui.toggle_value(&mut self.show_fps, "Show FPS");
+        ui.toggle_value(&mut self.show_wireframe, "Show Wireframe");
+        ui.toggle_value(&mut self.full_screen, "FullScreen");
     }
 }

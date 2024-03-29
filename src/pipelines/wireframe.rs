@@ -1,6 +1,9 @@
 use std::ops::Range;
 
+use wgpu::RenderPass;
+
 use crate::{
+    ecs::ecs::{ResId, World},
     state::create_render_pipeline,
     voxel::{
         instance::InstanceRaw,
@@ -72,25 +75,48 @@ impl WireframeRenderPipeline {
 
         Ok(Self { render_pipeline })
     }
+
+    pub fn draw<'a>(
+        &'a self,
+        render_pass: &mut RenderPass<'a>,
+        world: &'a World,
+        model: &ResId<Model>,
+        camera_bind_group: &'a wgpu::BindGroup,
+        instances: Range<u32>,
+    ) {
+        render_pass.set_pipeline(&self.render_pipeline);
+        let model = world.get(model).unwrap();
+        for mesh in model.meshes.iter() {
+            let mesh = world.get(mesh).unwrap();
+            render_pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            render_pass.set_bind_group(0, camera_bind_group, &[]);
+            render_pass.draw_indexed(0..mesh.num_elements, 0, instances.clone());
+        }
+    }
 }
 
 pub trait DrawWireframe<'a> {
     fn draw_wireframe_instanced(
         &mut self,
-        model: &'a Model,
+        model: &ResId<Model>,
         instances: Range<u32>,
         camera_bind_group: &'a wgpu::BindGroup,
+        world: &'a World,
     );
 }
 
 impl<'a, 'b> DrawWireframe<'a> for wgpu::RenderPass<'a> {
     fn draw_wireframe_instanced(
         &mut self,
-        model: &'a Model,
+        model: &ResId<Model>,
         instances: Range<u32>,
         camera_bind_group: &'a wgpu::BindGroup,
+        world: &'a World,
     ) {
+        let model = world.get(model).unwrap();
         for mesh in model.meshes.iter() {
+            let mesh = world.get(mesh).unwrap();
             self.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
             self.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             self.set_bind_group(0, camera_bind_group, &[]);

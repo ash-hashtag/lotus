@@ -124,8 +124,8 @@ impl CameraController {
             KeyCode::KeyD | KeyCode::ArrowRight => self.amount_right = amount,
             KeyCode::KeyW | KeyCode::ArrowUp => self.amount_forward = amount,
             KeyCode::KeyS | KeyCode::ArrowDown => self.amount_backward = amount,
-            KeyCode::KeyQ => self.amount_up = amount,
-            KeyCode::KeyZ => self.amount_down = amount,
+            KeyCode::Space => self.amount_up = amount,
+            KeyCode::ShiftLeft => self.amount_down = amount,
             _ => return false,
         };
 

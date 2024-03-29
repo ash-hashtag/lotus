@@ -71,23 +71,15 @@ impl Renderer {
             label: Some("Model Shader"),
             source: wgpu::ShaderSource::Wgsl(shader_code.into()),
         };
-        let render_pipeline = create_render_pipeline(
-            &device,
-            &render_pipeline_layout,
-            format,
-            Some(texture::Texture::DEPTH_FORMAT),
-            &[ModelVertex::desc(), InstanceRaw::desc()],
-            shader,
-            "Voxel Render Pipeline",
-        );
+        let shader = device.create_shader_module(shader);
 
-        let obj_model = Model::load_obj_model_from_file_path(
-            "assets/models/plane_cube.obj".into(),
-            device,
-            queue,
-            &texture_bind_group_layout,
-        )
-        .await?;
+        // let obj_model = Model::load_obj_model_from_file_path(
+        //     "assets/models/plane_cube.obj".into(),
+        //     device,
+        //     queue,
+        //     &texture_bind_group_layout,
+        // )
+        // .await?;
 
         todo!()
     }

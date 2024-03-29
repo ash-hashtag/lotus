@@ -53,14 +53,11 @@ pub const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 pub struct ModelVertex {
     pub position: [f32; 3],
     pub tex_coords: [f32; 2],
-    pub normal: [f32; 3],
-
-    pub tangent: [f32; 3],
-    pub bitangent: [f32; 3],
 }
 
 impl ModelVertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, 2 => Float32x3, 3 => Float32x3, 4 => Float32x3];
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2, ];
 }
 
 impl Vertex for ModelVertex {
