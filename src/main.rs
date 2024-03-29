@@ -3,7 +3,7 @@ use std::time::Instant;
 use log::{error, info};
 use winit::{
     event::{DeviceEvent, Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
     window::WindowBuilder,
 };
 mod camera;
@@ -17,17 +17,25 @@ mod ecs;
 mod noise;
 use state::State;
 
+
+enum CustomEvents {
+    NoiseBufferMapped,
+}
+
 fn main() {
     let _ = fast_log::init(fast_log::Config::new().console().level(log::LevelFilter::Info)).unwrap();
     info!("Initiating...");
-    let event_loop = EventLoop::new().unwrap();
+
+    let event_loop = EventLoopBuilder::<CustomEvents>::with_user_event().build().unwrap();
+    // let event_loop = EventLoop::<CustomEvents>::new().unwrap();
     let window = WindowBuilder::new()
         .with_title("Lotus")
         .build(&event_loop)
         .unwrap();
+    let proxy = event_loop.create_proxy();
     let mut state = tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(State::new(&window))
+        .block_on(State::new(&window, proxy))
         .unwrap();
 
     info!("State initialized");
@@ -82,6 +90,12 @@ fn main() {
                         } 
                     }
                 },
+                Event::UserEvent(event) => {
+                    match event {
+                        CustomEvents::NoiseBufferMapped => state.buffer_mapped(),
+                    }
+                    
+                }
                 _ => {}
             };
         })

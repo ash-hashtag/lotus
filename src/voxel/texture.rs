@@ -64,7 +64,6 @@ impl Texture {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         file_path: &Path,
-        is_normal_map: bool,
     ) -> anyhow::Result<Self> {
         info!("Loading Texture from {:?}", file_path);
         let data = tokio::fs::read(file_path).await?;
@@ -73,7 +72,6 @@ impl Texture {
             queue,
             &data,
             &format!("{:?}_texture", file_path),
-            is_normal_map,
         )?)
     }
 
@@ -82,10 +80,9 @@ impl Texture {
         queue: &wgpu::Queue,
         bytes: &[u8],
         label: &str,
-        is_normal_map: bool,
     ) -> image::ImageResult<Self> {
         let img = image::load_from_memory(bytes)?;
-        Ok(Self::from_image(device, queue, &img, label, is_normal_map))
+        Ok(Self::from_image(device, queue, &img, label))
     }
 
     pub fn create_texture(
@@ -148,18 +145,68 @@ impl Texture {
             sampler,
         }
     }
+    pub fn storage(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        size: (u32, u32),
+        rgba: &[u8],
+        format: wgpu::TextureFormat,
+        label: &str,
+    ) -> Self {
+        let (width, height) = size;
+        let size = wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
 
-    pub fn default_normal_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        let rgba = [128, 128, 255, 255];
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
 
-        return Self::create_texture(
-            device,
-            queue,
-            (1, 1),
+        queue.write_texture(
+            wgpu::ImageCopyTexture {
+                aspect: wgpu::TextureAspect::All,
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+            },
             &rgba,
-            wgpu::TextureFormat::Rgba8Unorm,
-            "Default Normal Texture",
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * width),
+                rows_per_image: Some(height),
+            },
+            size,
         );
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        Self {
+            texture,
+            view,
+            sampler,
+        }
     }
 
     pub fn default_diffuse_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
@@ -180,13 +227,8 @@ impl Texture {
         queue: &wgpu::Queue,
         img: &image::DynamicImage,
         label: &str,
-        is_normal_map: bool,
     ) -> Self {
-        let format = if is_normal_map {
-            wgpu::TextureFormat::Rgba8Unorm
-        } else {
-            wgpu::TextureFormat::Rgba8UnormSrgb
-        };
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
 
         Self::create_texture(
             device,
@@ -196,5 +238,34 @@ impl Texture {
             format,
             label,
         )
+    }
+
+    pub fn blank(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        size: (u32, u32),
+        storage: bool,
+    ) -> Self {
+        let rgba = vec![u8::MAX; (size.0 * size.1 * 4) as usize];
+
+        if storage {
+            Self::storage(
+                device,
+                queue,
+                size,
+                &rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+                "Blank Texture",
+            )
+        } else {
+            Self::create_texture(
+                device,
+                queue,
+                size,
+                &rgba,
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                "Blank Texture",
+            )
+        }
     }
 }

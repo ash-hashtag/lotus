@@ -21,7 +21,6 @@ pub struct Model {
 pub struct Material {
     pub name: String,
     pub diffuse_texture: texture::Texture,
-    pub normal_texture: texture::Texture,
     pub bind_group: wgpu::BindGroup,
 }
 
@@ -32,18 +31,16 @@ impl Material {
         layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let diffuse_texture = texture::Texture::default_diffuse_texture(device, queue);
-        let normal_texture = texture::Texture::default_normal_texture(device, queue);
 
         let name = "Default Material";
 
-        Self::new(device, name, diffuse_texture, normal_texture, layout)
+        Self::new(device, name, diffuse_texture, layout)
     }
 
     pub fn new(
         device: &wgpu::Device,
         name: impl Into<String>,
         diffuse_texture: texture::Texture,
-        normal_texture: texture::Texture,
         layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let name: String = name.into();
@@ -58,14 +55,6 @@ impl Material {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
                 },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&normal_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(&normal_texture.sampler),
-                },
             ],
             label: Some(name.as_str()),
         });
@@ -73,7 +62,6 @@ impl Material {
         Self {
             name,
             diffuse_texture,
-            normal_texture,
             bind_group,
         }
     }
@@ -168,25 +156,10 @@ impl Model {
                 device,
                 queue,
                 diffuse_texture_file_path.as_path(),
-                false,
             )
             .await?;
 
-            let normal_texture = if let Some(normal_texture_path) = m.normal_texture {
-                let normal_texture_file_path = parent_dir.join(normal_texture_path);
-
-                texture::Texture::from_file_path(
-                    device,
-                    queue,
-                    normal_texture_file_path.as_path(),
-                    true,
-                )
-                .await?
-            } else {
-                texture::Texture::default_normal_texture(device, queue)
-            };
-
-            let material = Material::new(device, m.name, diffuse_texture, normal_texture, layout);
+            let material = Material::new(device, m.name, diffuse_texture, layout);
 
             materials.push(Res::new(material));
         }

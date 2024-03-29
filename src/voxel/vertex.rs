@@ -101,12 +101,30 @@ impl PrimitiveRenderer {
         camera_bind_group: &'a BindGroup,
         light_bind_group: &'a BindGroup,
     ) {
+        self.draw_with_bind_groups(
+            rp,
+            &[&material.bind_group, camera_bind_group, light_bind_group],
+        );
+        // rp.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        // rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        // rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        // rp.set_bind_group(0, &material.bind_group, &[]);
+        // rp.set_bind_group(1, camera_bind_group, &[]);
+        // rp.set_bind_group(2, light_bind_group, &[]);
+        // rp.draw_indexed(0..self.num_elements, 0, 0..self.num_instances);
+    }
+
+    pub fn draw_with_bind_groups<'a>(
+        &'a self,
+        rp: &mut RenderPass<'a>,
+        bind_groups: &[&'a BindGroup],
+    ) {
         rp.set_vertex_buffer(1, self.instance_buffer.slice(..));
         rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        rp.set_bind_group(0, &material.bind_group, &[]);
-        rp.set_bind_group(1, camera_bind_group, &[]);
-        rp.set_bind_group(2, light_bind_group, &[]);
+        for (idx, bind_group) in bind_groups.iter().enumerate() {
+            rp.set_bind_group(idx as _, bind_group, &[]);
+        }
         rp.draw_indexed(0..self.num_elements, 0, 0..self.num_instances);
     }
 }
