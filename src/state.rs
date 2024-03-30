@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::Context;
 use cgmath::{Array, Deg, Point3, Quaternion, Rotation3, Vector3};
-use log::{info, warn};
+use log::{error, info, warn};
 use wgpu::{
     util::DeviceExt, BindingType, Extent3d, ImageCopyBuffer, ImageDataLayout, MaintainResult,
     PolygonMode, RenderPipeline,
@@ -21,6 +21,7 @@ use winit::{
 use crate::{
     camera::{Camera, CameraController, CameraUniform, Projection},
     ecs::ecs::Res,
+    noise::{NoiseGenerator, NoiseUniform},
     ui::{
         renderer::{UiNode, UiRenderer},
         settings::SettingsNode,
@@ -37,12 +38,6 @@ use crate::{
     CustomEvents,
 };
 
-#[derive(Debug)]
-enum AsyncMap {
-    WaitForPoll(wgpu::SubmissionIndex),
-    Idle,
-}
-
 pub struct RenderTarget<'a> {
     pub window: &'a Window,
     pub device: wgpu::Device,
@@ -50,16 +45,8 @@ pub struct RenderTarget<'a> {
 }
 
 pub struct State<'window> {
-    async_map: AsyncMap,
-    noise_output_texture: texture::Texture,
-    noise_output_buffer: wgpu::Buffer,
-    noise_seed: f32,
-    noise_seed_bind_group: wgpu::BindGroup,
-    noise_texture_bind_group: wgpu::BindGroup,
-    noise_seed_buffer: wgpu::Buffer,
     wireframe_render_pipeline: RenderPipeline,
     render_pipeline: RenderPipeline,
-    noise_render_pipeline: RenderPipeline,
     plane_renderer: PrimitiveRenderer,
     render_target: RenderTarget<'window>,
     default_material: Res<Material>,
@@ -92,6 +79,10 @@ pub struct State<'window> {
 
     last_draw_call_ts: Instant,
     proxy: EventLoopProxy<CustomEvents>,
+
+    noise_generator: NoiseGenerator,
+    noise_material: Res<Material>,
+    noise_uniform: NoiseUniform,
 }
 impl<'w> State<'w> {
     pub async fn new(
@@ -164,51 +155,6 @@ impl<'w> State<'w> {
 
         surface.configure(&device, &config);
 
-        let noise_texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("noise_texture_bind_group_layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                        },
-                        count: None,
-                    },
-                ],
-            });
-
-        let noise_texture = texture::Texture::blank(&device, &queue, (512, 512), false);
-        let noise_output_texture = texture::Texture::blank(&device, &queue, (512, 512), true);
-
-        let noise_texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &noise_texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&noise_texture.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&noise_output_texture.view),
-                },
-            ],
-            label: Some("Noise Texture Bind Group"),
-        });
-
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -271,12 +217,6 @@ impl<'w> State<'w> {
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
             contents: bytemuck::cast_slice(&[camera_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let noise_seed_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Noise Seed Buffer"),
-            contents: bytemuck::cast_slice(&[1.0 as f32]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -360,29 +300,6 @@ impl<'w> State<'w> {
                 }],
             });
 
-        let noise_seed_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("noise_seed_bind_group_layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-        let noise_seed_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &noise_seed_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: noise_seed_buffer.as_entire_binding(),
-            }],
-            label: Some("noise_bind_group"),
-        });
         let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &light_bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
@@ -406,16 +323,6 @@ impl<'w> State<'w> {
                 push_constant_ranges: &[],
             });
 
-        let noise_render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Noise Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    &noise_texture_bind_group_layout,
-                    &camera_bind_group_layout,
-                    &noise_seed_bind_group_layout,
-                ],
-                push_constant_ranges: &[],
-            });
         let shader = device.create_shader_module(shader);
 
         let render_pipeline = create_render_pipeline(
@@ -439,18 +346,6 @@ impl<'w> State<'w> {
             RenderPipeLineType::Wireframe,
         );
 
-        let noise_render_pipeline = create_render_pipeline(
-            &device,
-            &noise_render_pipeline_layout,
-            // &render_pipeline_layout,
-            config.format,
-            Some(texture::Texture::DEPTH_FORMAT),
-            &[ModelVertex::desc(), InstanceRaw::desc()],
-            &shader,
-            "Noise Render Pipeline",
-            RenderPipeLineType::Noise,
-        );
-
         let last_draw_call_ts = Instant::now();
 
         let delta = Duration::ZERO;
@@ -468,32 +363,28 @@ impl<'w> State<'w> {
 
         let plane_renderer = PrimitiveRenderer::new::<Plane>(&device, &[plane_instance]);
 
+        let noise_uniform = NoiseUniform::new(rand::random(), 5.0, (0.0, 0.0), (1024, 1024));
+        let noise_generator = NoiseGenerator::new(&device, noise_uniform).await?;
         window.set_cursor_visible(false);
-        let noise_output_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Noise Output Buffer"),
-            size: 512 * 512 * 4,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+
+        let noise_material = Res::new(Material::new(
+            &device,
+            "Noise Material",
+            texture::Texture::blank(&device, &queue, (1024, 1024), false),
+            &texture_bind_group_layout,
+        ));
+
         let render_target = RenderTarget {
             window,
             device,
             queue,
         };
 
-        let noise_seed = settings.noise_seed;
-        let async_map = AsyncMap::Idle;
-
         Ok(Self {
-            async_map,
+            noise_uniform,
+            noise_material,
+            noise_generator,
             proxy,
-            noise_output_buffer,
-            noise_output_texture,
-            noise_seed_buffer,
-            noise_texture_bind_group,
-            noise_seed,
-            noise_seed_bind_group,
-            noise_render_pipeline,
             plane_renderer,
             default_material,
             render_target,
@@ -559,19 +450,6 @@ impl<'w> State<'w> {
         }
     }
 
-    pub fn buffer_mapped(&mut self) {
-        info!("BufferMap Event Triggered");
-        if let AsyncMap::WaitForPoll(idx) = &self.async_map {
-            self.render_target
-                .device
-                .poll(wgpu::MaintainBase::WaitForSubmissionIndex(idx.clone()));
-        }
-        self.noise_output_buffer.unmap();
-        let data = self.noise_output_buffer.slice(..).get_mapped_range();
-        let data = data.as_ref();
-        self.async_map = AsyncMap::Idle;
-    }
-
     pub fn input(&mut self, window_event: &WindowEvent) -> bool {
         let ui_consumed = self
             .ui_renderer
@@ -581,9 +459,6 @@ impl<'w> State<'w> {
                 self.camera_controller.process_scroll(delta);
                 true
             }
-            // WindowEvent::MouseInput { state, .. } => {
-            //     false
-            // }
             WindowEvent::KeyboardInput { event, .. } => {
                 let is_pressed = event.state == ElementState::Pressed;
                 match event.physical_key {
@@ -597,6 +472,24 @@ impl<'w> State<'w> {
                                     self.hide_cursor();
                                 }
                             }
+
+                            true
+                        }
+                        KeyCode::KeyR => {
+                            let rt = tokio::runtime::Runtime::new().unwrap();
+                            let result = rt.block_on(NoiseGenerator::new(
+                                &self.render_target.device,
+                                self.noise_uniform,
+                            ));
+
+                            match result {
+                                Ok(new) => {
+                                    self.noise_generator = new;
+
+                                    info!("Reloaded Noise Generator")
+                                }
+                                Err(err) => error!("{err}"),
+                            };
 
                             true
                         }
@@ -650,14 +543,11 @@ impl<'w> State<'w> {
             }
         } else {
             if self.settings.show_noise {
-                if self.noise_seed != self.settings.noise_seed {
-                    self.noise_seed = self.settings.noise_seed;
-                    self.render_target.queue.write_buffer(
-                        &self.noise_seed_buffer,
-                        0,
-                        bytemuck::cast_slice(&[self.noise_seed]),
-                    );
-                }
+                self.noise_generator.update_uniform(
+                    &self.render_target.device,
+                    &self.render_target.queue,
+                    self.noise_uniform,
+                );
             }
         }
 
@@ -717,103 +607,73 @@ impl<'w> State<'w> {
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
-            let material = &self.obj_model.materials[0];
+            let mut material = &self.obj_model.materials[0];
 
             if self.settings.show_noise {
-                render_pass.set_pipeline(&self.noise_render_pipeline);
-                self.plane_renderer.draw_with_bind_groups(
-                    &mut render_pass,
-                    &[
-                        &self.noise_texture_bind_group,
-                        &self.camera_bind_group,
-                        &self.noise_seed_bind_group,
-                    ],
-                );
-            } else {
-                if self.settings.show_wireframe {
-                    render_pass.set_pipeline(&self.wireframe_render_pipeline);
-                } else {
-                    render_pass.set_pipeline(&self.render_pipeline);
-                }
-
-                self.plane_renderer.draw_with_material(
-                    &material,
-                    &mut render_pass,
-                    &self.camera_bind_group,
-                    &self.light_bind_group,
-                );
+                material = &self.noise_material;
             }
+
+            if self.settings.show_wireframe {
+                render_pass.set_pipeline(&self.wireframe_render_pipeline);
+            } else {
+                render_pass.set_pipeline(&self.render_pipeline);
+            }
+
+            self.plane_renderer.draw_with_material(
+                &material,
+                &mut render_pass,
+                &self.camera_bind_group,
+                &self.light_bind_group,
+            );
         }
 
+        let mut should_read_noise_output = false;
         {
             self.ui_renderer
                 .draw(&self.render_target, &mut encoder, &view, |ui| {
                     if self.show_settings {
                         self.settings.add_ui(ui);
+                        self.noise_uniform.add_ui(ui);
                     }
                     if self.settings.show_fps {
                         DebugOverlay { dt: self.delta }.add_ui(ui);
                     }
                 });
+
+            if self.settings.save_noise_texture {
+                self.settings.save_noise_texture = false;
+
+                self.noise_generator.compute(&mut encoder);
+                self.noise_generator
+                    .copy_to_texture(&mut encoder, &self.noise_material.diffuse_texture.texture);
+
+                should_read_noise_output = true;
+            }
         }
 
-        let mut is_reading_buffer = false;
-        if self.settings.save_noise_texture {
-            self.settings.save_noise_texture = false;
-            is_reading_buffer = true;
-            info!("Save Noise Texture? {:?}", self.async_map);
-            encoder.copy_texture_to_buffer(
-                self.noise_output_texture.texture.as_image_copy(),
-                ImageCopyBuffer {
-                    buffer: &self.noise_output_buffer,
-                    layout: ImageDataLayout {
-                        offset: 0,
-                        bytes_per_row: Some(512 * 4),
-                        rows_per_image: Some(512),
-                    },
-                },
-                Extent3d {
-                    width: 512,
-                    height: 512,
-                    depth_or_array_layers: 1,
-                },
-            );
-            info!("Copying Noise Texture Buffer");
-        }
         let idx = self
             .render_target
             .queue
             .submit(std::iter::once(encoder.finish()));
-        // self.async_map = AsyncMap::WaitForPoll(idx);
-
-        // self.render_target.device.poll(wgpu::MaintainBase::Poll);
-        // self.render_target
-        //     .device
-        //     .poll(wgpu::MaintainBase::wait_for(idx));
         output.present();
-        if is_reading_buffer {
-            self.noise_output_buffer
-                .slice(..)
-                .map_async(wgpu::MapMode::Read, |result| {
-                    info!("Async Map Read {:?}", result);
-                })
-        }
-        let maintain = wgpu::MaintainBase::WaitForSubmissionIndex(idx);
-        loop {
-            let result = self.render_target.device.poll(maintain.clone());
-            match result {
-                MaintainResult::SubmissionQueueEmpty => break,
-                MaintainResult::Ok => continue,
-            }
+
+        if should_read_noise_output {
+            // self.noise_generator.async_read();
         }
 
-        if is_reading_buffer {
-            {
-                let view = self.noise_output_buffer.slice(..).get_mapped_range();
-                save_tmp_image((512, 512), &view);
-            }
-            self.noise_output_buffer.unmap();
-        }
+        // let maintain = wgpu::MaintainBase::WaitForSubmissionIndex(idx);
+        // loop {
+        //     let result = self.render_target.device.poll(maintain.clone());
+        //     match result {
+        //         MaintainResult::SubmissionQueueEmpty => break,
+        //         MaintainResult::Ok => continue,
+        //     }
+        // }
+
+        // if should_read_noise_output {
+        //     self.noise_generator.read_and_save_to_img();
+        // }
+
         Ok(())
     }
 }

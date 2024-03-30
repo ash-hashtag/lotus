@@ -3,7 +3,7 @@ use std::time::Instant;
 use log::{error, info};
 use winit::{
     event::{DeviceEvent, Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
+    event_loop::{ControlFlow, EventLoopBuilder},
     window::WindowBuilder,
 };
 mod camera;
@@ -91,9 +91,6 @@ fn main() {
                     }
                 },
                 Event::UserEvent(event) => {
-                    match event {
-                        CustomEvents::NoiseBufferMapped => state.buffer_mapped(),
-                    }
                     
                 }
                 _ => {}

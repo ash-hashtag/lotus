@@ -118,30 +118,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_main_wf(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(1.0);
+    return vec4<f32>(in.tex_coords.x, in.tex_coords.y, 0.0, 0.0);
 }
 
-struct NoiseInput {
-    seed: f32,
-    offset: vec2<f32>,
-    size: vec2<u32>,
-}
-@group(2) @binding(0)
-var<uniform> noise_input: NoiseInput;
 
-@group(0) @binding(0) // 1 -> 0
-var textureOutput: texture_storage_2d<rgba8unorm, write>;
-
-
-
-@fragment
-fn fs_main_noise(
-    in: VertexOutput,
-    noise: NoiseInput,
-) -> @location(0) vec4<f32> {
-    let val = perlinNoise2(in.tex_coords * 10.0 + noise.seed * 1000.0 + offset);
-    let color = vec4<f32>(val, val, val, 1.0);
-    let pixelCoord = vec2<i32>(i32(in.tex_coords.x * f32(noise.size.x)), i32((1.0 - in.tex_coords.y) * (noise.size.y)));
-    textureStore(textureOutput, pixelCoord, color);
-    return color;
-}

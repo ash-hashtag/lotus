@@ -1,4 +1,4 @@
-use super::vertex::ModelVertex;
+use super::{texture, vertex::ModelVertex};
 
 pub struct Plane;
 
