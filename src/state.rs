@@ -6,10 +6,7 @@ use std::{
 use anyhow::Context;
 use cgmath::{Array, Deg, Point3, Quaternion, Rotation3, Vector3};
 use log::{error, info, warn};
-use wgpu::{
-    util::DeviceExt, BindingType, Extent3d, ImageCopyBuffer, ImageDataLayout, MaintainResult,
-    PolygonMode, RenderPipeline,
-};
+use wgpu::{util::DeviceExt, Device, PolygonMode, Queue, RenderPipeline, TextureFormat};
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, WindowEvent},
@@ -21,8 +18,10 @@ use winit::{
 use crate::{
     camera::{Camera, CameraController, CameraUniform, Projection},
     ecs::ecs::Res,
+    engine_state::{self, EngineState, TextureWithView},
     noise::{NoiseGenerator, NoiseUniform},
     ui::{
+        console::ConsoleNode,
         renderer::{UiNode, UiRenderer},
         settings::SettingsNode,
         text::DebugOverlay,
@@ -38,22 +37,26 @@ use crate::{
     CustomEvents,
 };
 
-pub struct RenderTarget<'a> {
-    pub window: &'a Window,
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
-}
-
 pub struct State<'window> {
+    engine_state: EngineState,
+
     wireframe_render_pipeline: RenderPipeline,
     render_pipeline: RenderPipeline,
     plane_renderer: PrimitiveRenderer,
-    render_target: RenderTarget<'window>,
+
+    window: &'window Window,
+    device: Device,
+    queue: Queue,
+
     default_material: Res<Material>,
 
     settings: SettingsNode,
     show_settings: bool,
     ui_renderer: UiRenderer,
+
+    console_node: ConsoleNode,
+    show_console: bool,
+
     delta: Duration,
     surface: wgpu::Surface<'window>,
 
@@ -70,7 +73,7 @@ pub struct State<'window> {
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
 
-    depth_texture: texture::Texture,
+    depth_texture: Res<TextureWithView>,
 
     obj_model: Res<Model>,
     light_buffer: wgpu::Buffer,
@@ -154,6 +157,7 @@ impl<'w> State<'w> {
         info!("WGPU CONFIG {:?}", config);
 
         surface.configure(&device, &config);
+        let mut engine_state = EngineState::default();
 
         let texture_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -179,8 +183,28 @@ impl<'w> State<'w> {
             });
         let shader_code = tokio::fs::read_to_string("assets/shaders/shader.wgsl").await?;
 
-        let default_material =
-            Material::default_material(&device, &queue, &texture_bind_group_layout);
+        let default_material_sampler = engine_state.create_sampler("default".into(), &device)?;
+        let default_material_texture = engine_state.create_texture(
+            "default".into(),
+            (1, 1),
+            TextureFormat::Rgba8Unorm,
+            &device,
+        )?;
+        engine_state.write_texture(
+            &default_material_texture.texture,
+            &queue,
+            &[255, 255, 255, 255],
+        );
+
+        // Material::default_material(&device, &queue, &texture_bind_group_layout);
+
+        let default_material = Material::new(
+            &device,
+            "default",
+            default_material_texture,
+            default_material_sampler.clone(),
+            &texture_bind_group_layout,
+        );
 
         let default_material = Res::new(default_material);
         let obj_model = Model::load_obj_model_from_file_path(
@@ -188,7 +212,7 @@ impl<'w> State<'w> {
             &device,
             &queue,
             &texture_bind_group_layout,
-            default_material.clone(),
+            &mut engine_state,
         )
         .await?;
 
@@ -309,8 +333,15 @@ impl<'w> State<'w> {
             label: Some("light_bind_group"),
         });
 
-        let depth_texture =
-            texture::Texture::create_depth_texture(&device, &config, "depth_texture");
+        // let depth_texture =
+        //     texture::Texture::create_depth_texture(&device, &config, "depth_texture");
+
+        let depth_texture = engine_state.create_texture(
+            "depth".into(),
+            (config.width, config.height),
+            TextureFormat::Depth32Float,
+            &device,
+        )?;
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -367,27 +398,45 @@ impl<'w> State<'w> {
         let noise_generator = NoiseGenerator::new(&device, noise_uniform).await?;
         window.set_cursor_visible(false);
 
-        let noise_material = Res::new(Material::new(
-            &device,
-            "Noise Material",
-            texture::Texture::blank(&device, &queue, (1024, 1024), false),
-            &texture_bind_group_layout,
-        ));
+        // let noise_material = Res::new(Material::new(
+        //     &device,
+        //     "Noise Material",
+        //     texture::Texture::blank(&device, &queue, (1024, 1024), false),
+        //     &texture_bind_group_layout,
+        // ));
 
-        let render_target = RenderTarget {
-            window,
-            device,
-            queue,
-        };
+        let noise_texture = engine_state.create_texture(
+            "noise".into(),
+            (1024, 1024),
+            TextureFormat::Rgba8Unorm,
+            &device,
+        )?;
+
+        let noise_material = Material::new(
+            &device,
+            "noise",
+            noise_texture,
+            default_material_sampler,
+            &texture_bind_group_layout,
+        );
+
+        let noise_material = Res::new(noise_material);
+        let console_node = ConsoleNode::new(proxy.clone());
+        let show_console = false;
 
         Ok(Self {
+            console_node,
+            show_console,
+            window,
+            queue,
+            device,
+            engine_state,
             noise_uniform,
             noise_material,
             noise_generator,
             proxy,
             plane_renderer,
             default_material,
-            render_target,
             settings,
             ui_renderer,
             delta,
@@ -423,7 +472,7 @@ impl<'w> State<'w> {
     }
 
     pub fn window(&self) -> &Window {
-        &self.render_target.window
+        &self.window
     }
 
     pub fn size(&self) -> winit::dpi::PhysicalSize<u32> {
@@ -438,22 +487,36 @@ impl<'w> State<'w> {
 
             self.projection.resize(new_size.width, new_size.height);
 
-            self.depth_texture = texture::Texture::create_depth_texture(
-                &self.render_target.device,
-                &self.config,
-                "depth_texture",
-            );
+            // self.depth_texture = texture::Texture::create_depth_texture(
+            //     &self.render_target.device,
+            //     &self.config,
+            //     "depth_texture",
+            // );
+            let _ = self.engine_state.dispose_texture_by_name("depth");
 
-            self.ui_renderer.resize(new_size.width, new_size.height);
-            self.surface
-                .configure(&self.render_target.device, &self.config);
+            let depth_texture = self
+                .engine_state
+                .create_texture(
+                    "depth".into(),
+                    (self.config.width, self.config.height),
+                    TextureFormat::Depth32Float,
+                    &self.device,
+                )
+                .unwrap();
+
+            self.depth_texture = depth_texture;
+
+            self.ui_renderer
+                .resize(self.config.width, self.config.height);
+            self.surface.configure(&self.device, &self.config);
         }
     }
 
     pub fn input(&mut self, window_event: &WindowEvent) -> bool {
-        let ui_consumed = self
-            .ui_renderer
-            .on_event(self.render_target.window, window_event);
+        let ui_consumed = self.ui_renderer.on_event(self.window, window_event);
+        if ui_consumed {
+            return true;
+        }
         match window_event {
             WindowEvent::MouseWheel { delta, .. } => {
                 self.camera_controller.process_scroll(delta);
@@ -471,16 +534,19 @@ impl<'w> State<'w> {
                                 } else {
                                     self.hide_cursor();
                                 }
+
+                                if self.show_console {
+                                    self.show_console = false;
+                                    self.console_node.clear();
+                                }
                             }
 
                             true
                         }
                         KeyCode::KeyR => {
                             let rt = tokio::runtime::Runtime::new().unwrap();
-                            let result = rt.block_on(NoiseGenerator::new(
-                                &self.render_target.device,
-                                self.noise_uniform,
-                            ));
+                            let result =
+                                rt.block_on(NoiseGenerator::new(&self.device, self.noise_uniform));
 
                             match result {
                                 Ok(new) => {
@@ -491,6 +557,15 @@ impl<'w> State<'w> {
                                 Err(err) => error!("{err}"),
                             };
 
+                            true
+                        }
+                        KeyCode::Backquote => {
+                            if is_pressed {
+                                if !self.show_console {
+                                    self.show_console = true;
+                                    self.console_node.should_request_focus();
+                                }
+                            }
                             true
                         }
                         _ => {
@@ -515,15 +590,14 @@ impl<'w> State<'w> {
     pub fn show_cursor(&self) {
         let size = self.size();
 
-        self.render_target
-            .window
+        self.window
             .set_cursor_position(PhysicalPosition::new(size.width / 2, size.height / 2))
             .unwrap();
-        self.render_target.window.set_cursor_visible(true);
+        self.window.set_cursor_visible(true);
     }
 
     pub fn hide_cursor(&self) {
-        self.render_target.window.set_cursor_visible(false);
+        self.window.set_cursor_visible(false);
     }
 
     pub fn update(&mut self, dt: Duration) {
@@ -537,35 +611,29 @@ impl<'w> State<'w> {
             let new_uniform = [self.camera_uniform];
             let new_slice: &[u8] = bytemuck::cast_slice(&new_uniform);
             if old_slice != new_slice {
-                self.render_target
-                    .queue
-                    .write_buffer(&self.camera_buffer, 0, new_slice);
+                self.queue.write_buffer(&self.camera_buffer, 0, new_slice);
             }
         } else {
             if self.settings.show_noise {
-                self.noise_generator.update_uniform(
-                    &self.render_target.device,
-                    &self.render_target.queue,
-                    self.noise_uniform,
-                );
+                self.noise_generator
+                    .update_uniform(&self.device, &self.queue, self.noise_uniform);
             }
         }
 
         if self.settings.full_screen {
-            if self.render_target.window.fullscreen().is_none() {
-                self.render_target
-                    .window
+            if self.window.fullscreen().is_none() {
+                self.window
                     .set_fullscreen(Some(winit::window::Fullscreen::Borderless(None)));
             }
         } else {
-            if self.render_target.window.fullscreen().is_some() {
-                self.render_target.window.set_fullscreen(None);
+            if self.window.fullscreen().is_some() {
+                self.window.set_fullscreen(None);
             }
         }
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        if self.render_target.window.is_minimized().unwrap_or(false) {
+        if self.window.is_minimized().unwrap_or(false) {
             return Ok(());
         }
         let output = self.surface.get_current_texture()?;
@@ -573,12 +641,11 @@ impl<'w> State<'w> {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder =
-            self.render_target
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Render Encoder"),
-                });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -629,16 +696,26 @@ impl<'w> State<'w> {
 
         let mut should_read_noise_output = false;
         {
-            self.ui_renderer
-                .draw(&self.render_target, &mut encoder, &view, |ui| {
+            self.ui_renderer.draw(
+                &self.device,
+                &self.queue,
+                &self.window,
+                &mut encoder,
+                &view,
+                |ui| {
                     if self.show_settings {
                         self.settings.add_ui(ui);
-                        self.noise_uniform.add_ui(ui);
+                        // self.noise_uniform.add_ui(ui);
                     }
                     if self.settings.show_fps {
                         DebugOverlay { dt: self.delta }.add_ui(ui);
                     }
-                });
+
+                    if self.show_console {
+                        self.console_node.add_ui(ui);
+                    }
+                },
+            );
 
             if self.settings.save_noise_texture {
                 self.settings.save_noise_texture = false;
@@ -651,10 +728,7 @@ impl<'w> State<'w> {
             }
         }
 
-        let idx = self
-            .render_target
-            .queue
-            .submit(std::iter::once(encoder.finish()));
+        let idx = self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
         if should_read_noise_output {

@@ -1,4 +1,5 @@
-use crate::state::RenderTarget;
+use wgpu::{Device, Queue};
+use winit::window::Window;
 
 pub struct UiRenderer {
     renderer: egui_wgpu::Renderer,
@@ -40,12 +41,11 @@ impl UiRenderer {
     fn render(
         &mut self,
         full_output: egui::FullOutput,
-        render_target: &RenderTarget<'_>,
+        device: &Device,
+        queue: &Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
     ) {
-        let device = &render_target.device;
-        let queue = &render_target.queue;
         let paint_jobs = self
             .context()
             .tessellate(full_output.shapes, self.screen_discriptor.pixels_per_point);
@@ -95,12 +95,14 @@ impl UiRenderer {
 
     pub fn draw(
         &mut self,
-        render_target: &RenderTarget<'_>,
+        device: &Device,
+        queue: &Queue,
+        window: &Window,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         run_ui: impl FnOnce(&mut egui::Ui),
     ) {
-        let input = self.input(render_target.window);
+        let input = self.input(window);
         let full_output = self.context().run(input, |ctx| {
             let frame = egui::Frame::default().fill(egui::Color32::TRANSPARENT);
             let panel = egui::CentralPanel::default().frame(frame);
@@ -108,7 +110,7 @@ impl UiRenderer {
             panel.show(ctx, run_ui);
         });
 
-        self.render(full_output, render_target, encoder, view);
+        self.render(full_output, device, queue, encoder, view);
     }
 }
 pub trait UiNode {

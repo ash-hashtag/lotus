@@ -1,13 +1,17 @@
 use anyhow::{anyhow, Context};
+use image::{EncodableLayout, GenericImageView};
 use log::error;
 use std::{
     io::{BufReader, Cursor},
     ops::Range,
     path::PathBuf,
 };
-use wgpu::{util::DeviceExt, BindGroup, RenderPass};
+use wgpu::{util::DeviceExt, BindGroup, RenderPass, Sampler};
 
-use crate::ecs::ecs::Res;
+use crate::{
+    ecs::ecs::Res,
+    engine_state::{EngineState, TextureWithView},
+};
 
 use super::{texture, vertex::ModelVertex};
 
@@ -20,27 +24,27 @@ pub struct Model {
 #[derive(Debug)]
 pub struct Material {
     pub name: String,
-    pub diffuse_texture: texture::Texture,
+    pub diffuse_texture: Res<TextureWithView>,
+    pub diffuse_sampler: Res<Sampler>,
     pub bind_group: wgpu::BindGroup,
 }
 
 impl Material {
-    pub fn default_material(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layout: &wgpu::BindGroupLayout,
-    ) -> Self {
-        let diffuse_texture = texture::Texture::default_diffuse_texture(device, queue);
-
-        let name = "Default Material";
-
-        Self::new(device, name, diffuse_texture, layout)
-    }
+    // pub fn default_material(
+    //     device: &wgpu::Device,
+    //     queue: &wgpu::Queue,
+    //     layout: &wgpu::BindGroupLayout,
+    // ) -> Self {
+    //     let diffuse_texture = texture::Texture::default_diffuse_texture(device, queue);
+    //     let name = "default";
+    //     Self::new(device, name, diffuse_texture, layout)
+    // }
 
     pub fn new(
         device: &wgpu::Device,
         name: impl Into<String>,
-        diffuse_texture: texture::Texture,
+        diffuse_texture: Res<TextureWithView>,
+        diffuse_sampler: Res<Sampler>,
         layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let name: String = name.into();
@@ -53,7 +57,7 @@ impl Material {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                    resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
                 },
             ],
             label: Some(name.as_str()),
@@ -62,6 +66,7 @@ impl Material {
         Self {
             name,
             diffuse_texture,
+            diffuse_sampler,
             bind_group,
         }
     }
@@ -114,7 +119,7 @@ impl Model {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
-        default_material: Res<Material>,
+        engine_state: &mut EngineState,
     ) -> anyhow::Result<Self> {
         let parent_dir = file_path
             .parent()
@@ -152,14 +157,38 @@ impl Model {
                 m.diffuse_texture
                     .with_context(|| anyhow!("No diffuse texture found"))?,
             );
-            let diffuse_texture = texture::Texture::from_file_path(
-                device,
-                queue,
-                diffuse_texture_file_path.as_path(),
-            )
-            .await?;
+            let image_bytes = tokio::fs::read(diffuse_texture_file_path.as_path()).await?;
+            let image = image::load_from_memory(&image_bytes)?;
+            let material_name = m.name;
+            let diffuse_texture = engine_state.create_texture(
+                material_name.clone(),
+                image.dimensions(),
+                wgpu::TextureFormat::Rgba8UnormSrgb,
+                &device,
+            )?;
+            engine_state.write_texture(
+                &diffuse_texture.texture,
+                &queue,
+                image.to_rgba8().as_bytes(),
+            );
+            // let diffuse_texture = texture::Texture::from_file_path(
+            //     device,
+            //     queue,
+            //     diffuse_texture_file_path.as_path(),
+            // )
+            // .await?;
 
-            let material = Material::new(device, m.name, diffuse_texture, layout);
+            let default_sampler = engine_state
+                .get_sampler("default")
+                .context("No Default Sampler In Engine")?;
+
+            let material = Material::new(
+                device,
+                material_name,
+                diffuse_texture,
+                default_sampler,
+                layout,
+            );
 
             materials.push(Res::new(material));
         }
@@ -199,7 +228,7 @@ impl Model {
                 num_elements: m.mesh.indices.len() as _,
                 material: materials
                     .get(m.mesh.material_id.unwrap_or(0))
-                    .unwrap_or(&default_material)
+                    .unwrap()
                     .clone(),
             };
 

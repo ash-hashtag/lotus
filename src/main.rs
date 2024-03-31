@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use clap::Parser;
 use log::{error, info};
 use winit::{
     event::{DeviceEvent, Event, WindowEvent},
@@ -15,16 +16,18 @@ mod app_config;
 mod ui;
 mod ecs;
 mod noise;
+mod engine_state;
+mod commands;
 use state::State;
 
 
+#[derive(Debug)]
 enum CustomEvents {
-    NoiseBufferMapped,
+    UserCommand(String),
 }
 
-fn main() {
-    let _ = fast_log::init(fast_log::Config::new().console().level(log::LevelFilter::Info)).unwrap();
-    info!("Initiating...");
+fn run() {
+    
 
     let event_loop = EventLoopBuilder::<CustomEvents>::with_user_event().build().unwrap();
     // let event_loop = EventLoop::<CustomEvents>::new().unwrap();
@@ -91,11 +94,34 @@ fn main() {
                     }
                 },
                 Event::UserEvent(event) => {
+                    match event {
+                        CustomEvents::UserCommand(cmd) => {
+                            info!("User issued a command '{}'", cmd);
+                        },
+                    }
                     
                 }
                 _ => {}
             };
         })
         .unwrap();
+}
+
+fn main() {
+    let _ = fast_log::init(fast_log::Config::new().console().level(log::LevelFilter::Info)).unwrap();
+    info!("Initiating...");
+
+
+    // let stdin = std::io::stdin();
+    // let mut lines = stdin.lines();
+    // while let Some(Ok(line)) = lines.next() {
+    //     match commands::Command::try_parse_from(line.split(' ').skip_while(|x| x.is_empty())) {
+    //         Ok(command) => info!("{:?}", command),
+    //         Err(err) => error!("{err}\n{}", commands::Command::help_string()),
+    //     };
+        
+    // }
+
+    run();
 
 }
