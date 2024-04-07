@@ -1,13 +1,11 @@
-use std::ops::RangeInclusive;
-
 use log::info;
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
     BindGroupLayoutEntry, BindingType, Buffer, BufferDescriptor, BufferUsages, CommandEncoder,
     ComputePassDescriptor, ComputePipeline, ComputePipelineDescriptor, Device, Extent3d,
-    ImageCopyBuffer, MaintainResult, PipelineLayoutDescriptor, Queue, ShaderModuleDescriptor,
-    ShaderStages, SubmissionIndex, Texture, TextureFormat,
+    ImageCopyBuffer, PipelineLayoutDescriptor, Queue, ShaderModuleDescriptor, ShaderStages,
+    Texture,
 };
 
 use crate::{state::save_tmp_image, ui::renderer::UiNode};
@@ -225,6 +223,7 @@ impl NoiseGenerator {
     }
 
     pub fn compute<'a>(&'a self, encoder: &mut CommandEncoder) {
+        const WORKGROUP_SIZE: u32 = 64;
         let (width, height) = self.noise_uniform.size();
         {
             let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
@@ -234,7 +233,7 @@ impl NoiseGenerator {
 
             compute_pass.set_pipeline(&self.noise_compute_pipeline);
             compute_pass.set_bind_group(0, &self.noise_bind_group, &[]);
-            compute_pass.dispatch_workgroups(width, height, 1);
+            compute_pass.dispatch_workgroups(128, 128, 1);
         }
         {
             encoder.copy_buffer_to_buffer(

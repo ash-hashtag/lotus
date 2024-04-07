@@ -25,6 +25,41 @@ pub struct TextureWithView {
     pub view: TextureView,
 }
 
+impl TextureWithView {
+    pub fn create(
+        texture_name: String,
+        size: (u32, u32),
+        format: TextureFormat,
+        device: &Device,
+    ) -> Self {
+        let (width, height) = size;
+        let size = Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        };
+
+        let desc = TextureDescriptor {
+            label: Some(&texture_name),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            format,
+            dimension: TextureDimension::D2,
+            usage: TextureUsages::TEXTURE_BINDING
+                | TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::COPY_DST,
+            view_formats: &[],
+        };
+
+        let texture = device.create_texture(&desc);
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        Self { texture, view }
+    }
+}
+
 #[derive(Debug)]
 pub enum EngineError {
     NameAlreadyExists,

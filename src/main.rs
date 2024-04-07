@@ -18,6 +18,8 @@ mod ecs;
 mod noise;
 mod engine_state;
 mod commands;
+mod scene;
+mod client;
 use state::State;
 
 

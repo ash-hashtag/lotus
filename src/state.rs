@@ -20,6 +20,7 @@ use crate::{
     ecs::ecs::Res,
     engine_state::{self, EngineState, TextureWithView},
     noise::{NoiseGenerator, NoiseUniform},
+    scene::Scene,
     ui::{
         console::ConsoleNode,
         renderer::{UiNode, UiRenderer},
@@ -38,8 +39,8 @@ use crate::{
 };
 
 pub struct State<'window> {
-    engine_state: EngineState,
-
+    scene: Scene,
+    // engine_state: EngineState,
     wireframe_render_pipeline: RenderPipeline,
     render_pipeline: RenderPipeline,
     plane_renderer: PrimitiveRenderer,
@@ -424,13 +425,14 @@ impl<'w> State<'w> {
         let console_node = ConsoleNode::new(proxy.clone());
         let show_console = false;
 
+        let scene = Scene::default();
         Ok(Self {
+            scene,
             console_node,
             show_console,
             window,
             queue,
             device,
-            engine_state,
             noise_uniform,
             noise_material,
             noise_generator,
@@ -480,32 +482,19 @@ impl<'w> State<'w> {
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        info!("Resize Event {:?}", new_size);
         if new_size.width > 0 && new_size.height > 0 {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
-
             self.projection.resize(new_size.width, new_size.height);
-
-            // self.depth_texture = texture::Texture::create_depth_texture(
-            //     &self.render_target.device,
-            //     &self.config,
-            //     "depth_texture",
-            // );
-            let _ = self.engine_state.dispose_texture_by_name("depth");
-
-            let depth_texture = self
-                .engine_state
-                .create_texture(
-                    "depth".into(),
-                    (self.config.width, self.config.height),
-                    TextureFormat::Depth32Float,
-                    &self.device,
-                )
-                .unwrap();
-
-            self.depth_texture = depth_texture;
-
+            let depth_texture = TextureWithView::create(
+                "depth".into(),
+                (self.config.width, self.config.height),
+                TextureFormat::Depth32Float,
+                &self.device,
+            );
+            self.depth_texture = Res::new(depth_texture);
             self.ui_renderer
                 .resize(self.config.width, self.config.height);
             self.surface.configure(&self.device, &self.config);
@@ -589,7 +578,6 @@ impl<'w> State<'w> {
 
     pub fn show_cursor(&self) {
         let size = self.size();
-
         self.window
             .set_cursor_position(PhysicalPosition::new(size.width / 2, size.height / 2))
             .unwrap();
