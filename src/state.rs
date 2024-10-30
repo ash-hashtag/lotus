@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use cgmath::{Array, Deg, Point3, Quaternion, Rotation3, Vector3};
@@ -18,7 +15,7 @@ use winit::{
 use crate::{
     camera::{Camera, CameraController, CameraUniform, Projection},
     ecs::ecs::Res,
-    engine_state::{self, EngineState, TextureWithView},
+    engine_state::{EngineState, TextureWithView},
     noise::{NoiseGenerator, NoiseUniform},
     scene::Scene,
     ui::{
@@ -55,7 +52,7 @@ pub struct State<'window> {
     show_settings: bool,
     ui_renderer: UiRenderer,
 
-    console_node: ConsoleNode,
+    pub console_node: ConsoleNode,
     show_console: bool,
 
     delta: Duration,
@@ -393,7 +390,7 @@ impl<'w> State<'w> {
             scale: Vector3::from_value(10.0),
         };
 
-        let plane_renderer = PrimitiveRenderer::new::<Plane>(&device, &[plane_instance]);
+        let plane_renderer = PrimitiveRenderer::new::<Plane>(&device, vec![plane_instance]);
 
         let noise_uniform = NoiseUniform::new(rand::random(), 5.0, (0.0, 0.0), (1024, 1024));
         let noise_generator = NoiseGenerator::new(&device, noise_uniform).await?;
@@ -716,7 +713,7 @@ impl<'w> State<'w> {
             }
         }
 
-        let idx = self.queue.submit(std::iter::once(encoder.finish()));
+        let _idx = self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
         if should_read_noise_output {
@@ -738,6 +735,20 @@ impl<'w> State<'w> {
 
         Ok(())
     }
+    pub fn spawn(&mut self, mesh: MeshType) {
+        match mesh {
+            MeshType::Plane => {
+                let plane_instance = Instance {
+                    position: Vector3::from_value(0.0),
+                    rotation: Quaternion::from_axis_angle(Vector3::unit_y(), Deg(0.0)),
+                    scale: Vector3::from_value(1.0),
+                };
+
+                self.plane_renderer
+                    .add_instance(plane_instance, &self.queue);
+            }
+        }
+    }
 }
 
 pub fn save_tmp_image(size: (u32, u32), data: &[u8]) {
@@ -751,6 +762,10 @@ pub fn save_tmp_image(size: (u32, u32), data: &[u8]) {
         image::ImageFormat::Png,
     )
     .unwrap();
+}
+
+pub enum MeshType {
+    Plane,
 }
 
 pub enum RenderPipeLineType {

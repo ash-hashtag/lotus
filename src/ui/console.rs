@@ -1,3 +1,4 @@
+use egui::{Color32, RichText};
 use log::info;
 use winit::event_loop::EventLoopProxy;
 
@@ -5,7 +6,11 @@ use crate::CustomEvents;
 
 use super::renderer::UiNode;
 
+pub const HISTORY_CAPACITY: usize = 2048;
+pub const HISTORY_LENGTH: usize = 1024;
+
 pub struct ConsoleNode {
+    history: String,
     command: String,
     proxy: EventLoopProxy<CustomEvents>,
     request_focus: bool,
@@ -15,9 +20,23 @@ impl ConsoleNode {
     pub fn new(proxy: EventLoopProxy<CustomEvents>) -> Self {
         Self {
             command: String::new(),
+            history: String::with_capacity(HISTORY_CAPACITY),
             proxy,
             request_focus: false,
         }
+    }
+
+    pub fn add_to_history(&mut self, s: &str) {
+        if self.history.len() + s.len() > HISTORY_CAPACITY {
+            let mut new_history = String::with_capacity(HISTORY_CAPACITY);
+            if let Some(index) = self.history[self.history.len() - HISTORY_LENGTH..].find("\n") {
+                new_history += &self.history[self.history.len() - HISTORY_LENGTH + index + 1..];
+            }
+            self.history = new_history;
+        }
+
+        self.history += s;
+        self.history += "\n";
     }
 
     pub fn clear(&mut self) {
@@ -40,13 +59,16 @@ impl UiNode for ConsoleNode {
             let is_submitted = re.ctx.input(|x| x.key_down(egui::Key::Enter));
 
             if is_submitted && re.lost_focus() {
-                info!("Executing Command {}", self.command);
+                let cmd = self.command.clone();
+                self.add_to_history(&cmd);
                 self.proxy
-                    .send_event(CustomEvents::UserCommand(self.command.clone()))
+                    .send_event(CustomEvents::UserCommand(cmd))
                     .unwrap();
                 self.command.clear();
                 re.request_focus();
             }
+            let text = RichText::new(&self.history).color(Color32::BLACK);
+            let _re = ui.label(text);
         });
     }
 }

@@ -8,6 +8,13 @@ pub struct UiRenderer {
 }
 
 impl UiRenderer {
+    pub fn add_font(&self, font_name: String, font_path: &str) {
+        let mut fonts = egui::FontDefinitions::default();
+        let bytes = std::fs::read(font_path).unwrap();
+        let data = egui::FontData::from_owned(bytes);
+        fonts.font_data.insert(font_name, data);
+    }
+
     pub fn context(&self) -> &egui::Context {
         self.state.egui_ctx()
     }

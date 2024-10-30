@@ -1,6 +1,5 @@
 use std::time::Instant;
-
-use clap::Parser;
+use commands::Command;
 use log::{error, info};
 use winit::{
     event::{DeviceEvent, Event, WindowEvent},
@@ -40,7 +39,7 @@ fn run() {
     let proxy = event_loop.create_proxy();
     let mut state = tokio::runtime::Runtime::new()
         .unwrap()
-        .block_on(State::new(&window, proxy))
+        .block_on(State::new(&window, proxy.clone()))
         .unwrap();
 
     info!("State initialized");
@@ -98,7 +97,12 @@ fn run() {
                 Event::UserEvent(event) => {
                     match event {
                         CustomEvents::UserCommand(cmd) => {
-                            info!("User issued a command '{}'", cmd);
+                            if cmd.trim() == "exit" {
+                                window_target.exit();
+                            } else {
+                                info!("User issued a command '{}'", cmd);
+                                Command::command_to_state(&cmd, &mut state);
+                            }
                         },
                     }
                     

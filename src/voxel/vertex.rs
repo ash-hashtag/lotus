@@ -45,10 +45,11 @@ pub struct PrimitiveRenderer {
     instance_buffer: wgpu::Buffer,
     num_elements: u32,
     num_instances: u32,
+    instances: Vec<Instance>,
 }
 
 impl PrimitiveRenderer {
-    pub fn new<T>(device: &Device, instances: &[Instance]) -> Self
+    pub fn new<T>(device: &Device, instances: Vec<Instance>) -> Self
     where
         T: PrimitiveShape,
     {
@@ -76,6 +77,7 @@ impl PrimitiveRenderer {
         let num_instances = instances.len() as _;
 
         Self {
+            instances,
             num_instances,
             vertex_buffer,
             index_buffer,
@@ -84,14 +86,19 @@ impl PrimitiveRenderer {
         }
     }
 
-    pub fn update_instances(&mut self, instances: Vec<Instance>, queue: &Queue) {
-        let instance_data: Vec<_> = instances.iter().map(Instance::to_raw).collect();
+    pub fn add_instance(&mut self, instance: Instance, queue: &Queue) {
+        self.instances.push(instance);
+        self.update_instances(queue);
+    }
+
+    pub fn update_instances(&mut self, queue: &Queue) {
+        let instance_data: Vec<_> = self.instances.iter().map(Instance::to_raw).collect();
         queue.write_buffer(
             &self.instance_buffer,
             0,
             bytemuck::cast_slice(&instance_data),
         );
-        self.num_instances = instances.len() as _;
+        self.num_instances = self.instances.len() as _;
     }
 
     pub fn draw_with_material<'a>(
